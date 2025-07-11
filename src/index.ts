@@ -630,36 +630,50 @@ class MemoryServer {
     let currentLimit = initialLimit;
     let attempts = 0;
     
+    console.log(`[DEBUG] autoReduceResponse starting with initialLimit: ${initialLimit}`);
+    
     while (attempts < maxAttempts) {
       try {
         const response = await buildFunction(currentLimit);
         const responseText = JSON.stringify(response);
         const tokenCount = Math.ceil(responseText.length / 4);
         
+        console.log(`[DEBUG] Attempt ${attempts + 1}: limit=${currentLimit}, response size=${responseText.length} chars, tokens=${tokenCount}`);
+        
         // If response fits within token limit, return it
         if (tokenCount <= tokenLimit) {
+          console.log(`[DEBUG] Response fits within token limit, returning`);
           return response;
         }
         
         // If this was our last attempt, let MCP handle the overflow
         if (attempts === maxAttempts - 1) {
-          console.log(`Auto-reduce failed after ${attempts + 1} attempts. Final response: ${tokenCount} tokens. Letting MCP handle overflow.`);
-          return response; // Return the actual response, let MCP detect overflow
+          console.log(`[ERROR] Auto-reduce failed after ${attempts + 1} attempts. Final response: ${tokenCount} tokens. Letting MCP handle overflow.`);
+          console.log(`[ERROR] This will cause MCP tool response to exceed 25000 token limit!`);
+          // Return what we can with final reduced limit
+          console.log(`[DEBUG] Using buildGenericStreamingResponse to fit within token limit`);
+          const finalResponse = await buildFunction(1); // Get minimal results
+          return await streamingResponseBuilder.buildGenericStreamingResponse(
+            finalResponse.content || [], 
+            tokenLimit
+          );
         }
         
         // Reduce limit and try again
         currentLimit = Math.max(1, Math.floor(currentLimit * reductionFactor));
+        console.log(`[DEBUG] Reducing limit for next attempt: ${currentLimit}`);
         attempts++;
         
       } catch (error) {
         console.error(`Auto-reduce attempt ${attempts + 1} failed:`, error);
+        // Return minimal valid response on error
         return {
-          content: { entities: [], relations: [] },
+          content: [],
           meta: {
             tokenCount: 0,
-            tokenLimit: 24480,
+            tokenLimit: tokenLimit,
             truncated: true,
-            truncationReason: `Auto-reduce error: ${error}`,
+            error: `Auto-reduce error: ${error}`,
             sectionsIncluded: [],
             autoReduceAttempts: attempts + 1
           }

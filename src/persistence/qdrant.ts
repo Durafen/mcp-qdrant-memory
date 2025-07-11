@@ -40,6 +40,7 @@ interface ChunkPayload {
   relation_target?: string;
   relation_type?: string;
   created_at?: string;
+  observations?: string[];
 }
 
 interface QdrantCollectionConfig {
@@ -473,7 +474,7 @@ export class QdrantPersistence {
             ...payload,
             entity_name: entityName, // Normalize field name
             has_implementation: hasImplementation,
-            observations: payload.observations || [] // Expose observations array with empty fallback
+            ...(payload.observations && { observations: payload.observations }) // Only include observations if they exist
           }
         });
       }
@@ -877,7 +878,7 @@ export class QdrantPersistence {
               entities.push({
                 name: entityName,
                 entityType: payload.entity_type,
-                observations: (payload as any).observations || []
+                observations: payload.observations || []
               });
               entityCount++;
             }

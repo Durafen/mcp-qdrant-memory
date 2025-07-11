@@ -9,7 +9,7 @@ import { TokenBudget, ContentSection } from './types.js';
 export const TOKEN_CONFIG = {
   CHARS_PER_TOKEN: 4, // Industry standard approximation
   SAFETY_MARGIN: 0.96, // 4% safety buffer for maximum utilization
-  DEFAULT_TOKEN_LIMIT: 25500, // Optimized for max utilization under 25k
+  DEFAULT_TOKEN_LIMIT: 23000, // Account for MCP wrapper overhead
   MAX_STRING_PREVIEW: 500, // Max length for string previews
   TRUNCATION_SUFFIX: '...[truncated]'
 } as const;

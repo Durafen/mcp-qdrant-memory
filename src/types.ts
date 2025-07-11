@@ -21,6 +21,7 @@ export interface EntityChunk extends Record<string, unknown> {
   entity_type: string;
   chunk_type: 'metadata' | 'implementation';
   content: string;
+  content_hash?: string;
   file_path?: string;
   line_number?: number;
   has_implementation?: boolean;
