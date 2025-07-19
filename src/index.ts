@@ -2,6 +2,10 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// Console override temporarily disabled - breaks MCP server startup
+// import { overrideConsoleForMCP } from './console-override.js';
+// overrideConsoleForMCP();
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -134,10 +138,10 @@ class KnowledgeGraphManager {
     }
   }
 
-  async getRawGraph(limit?: number, entityTypes?: string[]): Promise<KnowledgeGraph> {
+  async getRawGraph(limit?: number, entityTypes?: string[], mode: 'smart' | 'entities' | 'relationships' | 'raw' = 'raw'): Promise<KnowledgeGraph> {
     try {
       // Get limited raw entities and relations from Qdrant for streaming processing
-      const rawData = await this.qdrant.scrollAll({ mode: 'raw', limit, entityTypes });
+      const rawData = await this.qdrant.scrollAll({ mode, limit, entityTypes });
       if ('entities' in rawData && 'relations' in rawData) {
         return rawData as KnowledgeGraph;
       }
@@ -511,7 +515,7 @@ class MemoryServer {
             // Auto-cut: Exponential backoff if response exceeds 25k tokens
             const finalResponse = await this.autoReduceResponse(
               async (tryLimit: number) => {
-                const rawGraph = await this.graphManager.getRawGraph(tryLimit, entityTypes);
+                const rawGraph = await this.graphManager.getRawGraph(tryLimit, entityTypes, mode);
                 const options: ScrollOptions = { mode, entityTypes, limit: tryLimit };
                 return await streamingResponseBuilder.buildStreamingResponse(
                   rawGraph.entities,
@@ -567,8 +571,8 @@ class MemoryServer {
             // Start with actual scope limits from Qdrant persistence
             const scopeLimits = {
               'minimal': 50,      // No specific limit for minimal
-              'logical': 25,      // From memory: logical scope limit
-              'dependencies': 40  // From memory: dependencies scope limit
+              'logical': 20,      // From memory: logical scope limit
+              'dependencies': 20  // From memory: dependencies scope limit
             };
             const initialLimit = scopeLimits[args.scope || 'minimal'];
             
@@ -630,7 +634,7 @@ class MemoryServer {
     let currentLimit = initialLimit;
     let attempts = 0;
     
-    console.log(`[DEBUG] autoReduceResponse starting with initialLimit: ${initialLimit}`);
+    console.error(`[DEBUG] autoReduceResponse starting with initialLimit: ${initialLimit}`);
     
     while (attempts < maxAttempts) {
       try {
@@ -638,20 +642,20 @@ class MemoryServer {
         const responseText = JSON.stringify(response);
         const tokenCount = Math.ceil(responseText.length / 4);
         
-        console.log(`[DEBUG] Attempt ${attempts + 1}: limit=${currentLimit}, response size=${responseText.length} chars, tokens=${tokenCount}`);
+        console.error(`[DEBUG] Attempt ${attempts + 1}: limit=${currentLimit}, response size=${responseText.length} chars, tokens=${tokenCount}`);
         
         // If response fits within token limit, return it
         if (tokenCount <= tokenLimit) {
-          console.log(`[DEBUG] Response fits within token limit, returning`);
+          console.error(`[DEBUG] Response fits within token limit, returning`);
           return response;
         }
         
         // If this was our last attempt, let MCP handle the overflow
         if (attempts === maxAttempts - 1) {
-          console.log(`[ERROR] Auto-reduce failed after ${attempts + 1} attempts. Final response: ${tokenCount} tokens. Letting MCP handle overflow.`);
-          console.log(`[ERROR] This will cause MCP tool response to exceed 25000 token limit!`);
+          console.error(`[ERROR] Auto-reduce failed after ${attempts + 1} attempts. Final response: ${tokenCount} tokens. Letting MCP handle overflow.`);
+          console.error(`[ERROR] This will cause MCP tool response to exceed 25000 token limit!`);
           // Return what we can with final reduced limit
-          console.log(`[DEBUG] Using buildGenericStreamingResponse to fit within token limit`);
+          console.error(`[DEBUG] Using buildGenericStreamingResponse to fit within token limit`);
           const finalResponse = await buildFunction(1); // Get minimal results
           return await streamingResponseBuilder.buildGenericStreamingResponse(
             finalResponse.content || [], 
@@ -661,7 +665,7 @@ class MemoryServer {
         
         // Reduce limit and try again
         currentLimit = Math.max(1, Math.floor(currentLimit * reductionFactor));
-        console.log(`[DEBUG] Reducing limit for next attempt: ${currentLimit}`);
+        console.error(`[DEBUG] Reducing limit for next attempt: ${currentLimit}`);
         attempts++;
         
       } catch (error) {

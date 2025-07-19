@@ -1,0 +1,11 @@
+{
+  "session_id": "b13f1b78-fc23-436c-8167-0611d38dc111",
+  "transcript_path": "/Users/Duracula 1/.claude/projects/-Users-Duracula-1-Python-Projects-memory/b13f1b78-fc23-436c-8167-0611d38dc111.jsonl",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/Users/Duracula 1/Python-Projects/memory/mcp-qdrant-memory/src/persistence/qdrant.ts",
+    "old_string": "  private filterRelationsForEntities(relations: Relation[], entities: Entity[]): Relation[] {",
+    "new_string": "  private filterRelationsByEntityTypes(relations: Relation[], allEntities: Entity[], entityTypes?: string[]): Relation[] {\n    return relations;\n  }\n\n  private filterRelationsForEntities(relations: Relation[], entities: Entity[]): Relation[] {"
+  }
+}

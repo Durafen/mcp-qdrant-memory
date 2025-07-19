@@ -237,11 +237,11 @@ export class StreamingResponseBuilder {
   ): Promise<StreamingGraphResponse> {
     const filteredEntities = this.filterAndLimitEntities(context.entities, options);
     const result = await this.fitContentToBudget(
-      { entities: filteredEntities, relations: [] },
+      { entities: filteredEntities, relations: context.relations },
       context.budget,
       (content) => ({
-        ...content,
-        entities: content.entities.slice(0, Math.floor(content.entities.length * 0.8))
+        entities: content.entities.slice(0, Math.floor(content.entities.length * 0.8)),
+        relations: content.relations // ✅ Preserve relations during reduction
       })
     );
 
@@ -254,7 +254,7 @@ export class StreamingResponseBuilder {
         truncationReason: result.truncated 
           ? `Reduced from ${filteredEntities.length} to ${result.content.entities.length} entities`
           : undefined,
-        sectionsIncluded: ['entities']
+        sectionsIncluded: ['entities', 'relations']
       }
     };
   }

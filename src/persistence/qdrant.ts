@@ -374,7 +374,7 @@ export class QdrantPersistence {
     });
   }
 
-  async searchSimilar(query: string, entityTypes?: string[], limit: number = 50) {
+  async searchSimilar(query: string, entityTypes?: string[], limit: number = 20) {
     await this.connect();
     if (!COLLECTION_NAME) {
       throw new Error("COLLECTION_NAME environment variable is required");
@@ -520,7 +520,7 @@ export class QdrantPersistence {
       // Search for implementation chunks for the specific entity
       const results = await this.client.search(COLLECTION_NAME!, {
         vector: new Array(this.vectorSize).fill(0), // Dummy vector for filter-only search
-        limit: 50, // Reasonable limit for implementation chunks
+        limit: 50, // Optimized: Minimal scope maintained at 50 (no change needed)
         with_payload: true,
         filter: {
           must: [
@@ -627,7 +627,7 @@ export class QdrantPersistence {
       // Also search for private helper functions (starting with _) in the same file
       const helperResults = await this.client.search(COLLECTION_NAME!, {
         vector: new Array(this.vectorSize).fill(0),
-        limit: limit || 25,
+        limit: limit || 12, // Optimized: Reduced from 25 to 12 to prevent token overflow
         with_payload: true,
         filter: {
           must: [
@@ -822,6 +822,16 @@ export class QdrantPersistence {
     // Qdrant already filtered by entityTypes, no additional filtering needed
     let filteredEntities = rawData.entities;
     let filteredRelations = rawData.relations;
+    
+    // For entities mode with entityTypes filtering, filter relations to only show relevant ones
+    console.log(`DEBUG: mode="${mode}", entityTypeFilter=${JSON.stringify(entityTypeFilter)}, entities.length=${filteredEntities.length}, relations.length=${filteredRelations.length}`);
+    
+    if (entityTypeFilter && entityTypeFilter.length > 0) {
+      console.log(`DEBUG: Filtering relations for entityTypes filter (mode: ${mode})`);
+      console.log(`DEBUG: Relations before filtering:`, filteredRelations.length);
+      filteredRelations = this.filterRelationsForEntities(filteredRelations, filteredEntities);
+      console.log(`DEBUG: Relations after filtering:`, filteredRelations.length);
+    }
 
     // All modes now return raw data for streaming processing
     // The streaming response builder handles mode-specific formatting with token limits
@@ -832,6 +842,7 @@ export class QdrantPersistence {
     // Convert v2.4 chunks back to legacy format for read_graph compatibility
     const entities: Entity[] = [];
     const relations: Relation[] = [];
+    const allEntities: Entity[] = []; // Track all entities for relation type filtering
     let offset: string | number | undefined = undefined;
     const batchSize = 100;
     
@@ -839,20 +850,12 @@ export class QdrantPersistence {
     let entityCount = 0;
     const maxEntities = limit || Number.MAX_SAFE_INTEGER;
 
-    // Build filter for entityTypes if provided
+    // Build filter for entityTypes - filter entities, keep all relations  
     const filter: any = {
       must: [
         { key: "type", match: { value: "chunk" } }
       ]
     };
-    
-    if (entityTypes && entityTypes.length > 0) {
-      // Simple test filter - just metadata entities by type
-      filter.must.push(
-        { key: "chunk_type", match: { value: "metadata" } },
-        { key: "entity_type", match: { any: entityTypes } }
-      );
-    }
 
     do {
       const scrollResult = await this.client.scroll(COLLECTION_NAME!, {
@@ -860,7 +863,7 @@ export class QdrantPersistence {
         offset,
         with_payload: true,
         with_vector: false,
-        filter: entityTypes && entityTypes.length > 0 ? filter : undefined
+        filter: filter
       });
 
       
@@ -869,25 +872,44 @@ export class QdrantPersistence {
         const payload = point.payload as unknown as ChunkPayload;
 
         if (payload.type === "chunk") {
+          console.log('Processing chunk:', payload.chunk_type, payload.entity_name);
           if (payload.chunk_type === 'metadata') {
-            // Only add entity if we haven't reached the limit
+            // Only add entity if we haven't reached the limit AND passes entityTypes filter
             if (entityCount < maxEntities) {
-              // Convert metadata chunks to legacy entity format
-              // Handle both 'name' and 'entity_name' field variations
+              // Check entityTypes filter - if specified, only include matching entities
+              let passesFilter = true;
+              if (entityTypes && entityTypes.length > 0) {
+                // Exclude chunk types from entityTypes filtering
+                const knownChunkTypes = ["metadata", "implementation"];
+                const actualEntityTypes = entityTypes.filter(type => !knownChunkTypes.includes(type));
+                
+                if (actualEntityTypes.length > 0) {
+                  passesFilter = actualEntityTypes.includes(payload.entity_type);
+                }
+              }
+              
+              // Always track all entities for relation type filtering
               const entityName = (payload as any).entity_name || (payload as any).name || 'unknown';
-              entities.push({
+              const entity = {
                 name: entityName,
                 entityType: payload.entity_type,
                 observations: payload.observations || []
-              });
-              entityCount++;
+              };
+              allEntities.push(entity);
+              
+              if (passesFilter) {
+                entities.push(entity);
+                entityCount++;
+              }
             }
           } else if (payload.chunk_type === 'relation') {
             // Always process relations regardless of entity limit
             // Handle actual stored field names: entity_name -> from, relation_target -> to
-            const from = (payload as any).from || (payload as any).entity_name;
-            const to = (payload as any).to || (payload as any).relation_target;
+            const from = (payload as any).entity_name || (payload as any).from;
+            const to = (payload as any).relation_target || (payload as any).to;
             const relationType = payload.relation_type || (payload as any).relationType;
+            
+            console.log('Processing relation:', { from, to, relationType, payload });
             
             if (from && to && relationType) {
               relations.push({
@@ -895,6 +917,9 @@ export class QdrantPersistence {
                 to: to,
                 relationType: relationType
               });
+              console.log('Added relation:', { from, to, relationType });
+            } else {
+              console.log('Skipped relation - missing fields:', { from, to, relationType });
             }
           }
         }
@@ -904,13 +929,17 @@ export class QdrantPersistence {
         ? scrollResult.next_page_offset 
         : undefined;
         
-      // Exit early if we've reached our entity limit
-      if (entityCount >= maxEntities) {
+      // Continue scrolling for relations even after entity limit reached
+      // Only exit if we've collected enough entities AND no more pages
+      if (entityCount >= maxEntities && offset === null) {
         break;
       }
     } while (offset !== null && offset !== undefined);
 
-    return { entities, relations };
+    // Filter relations by entity types if specified
+    const filteredRelations = this.filterRelationsByEntityTypes(relations, allEntities, entityTypes);
+    
+    return { entities, relations: filteredRelations };
   }
 
   private _buildEntitiesResponse(entities: Entity[], relations: Relation[], limitPerType: number): KnowledgeGraph {
@@ -1181,7 +1210,7 @@ export class QdrantPersistence {
       case "smart":
         return this.formatSmartEntityGraph(targetEntityResults[0], entities, relatedRelations);
       case "entities":
-        return { entities, relations: [] };
+        return { entities, relations: relatedRelations };
       case "relationships":
         return { entities: [], relations: relatedRelations };
       case "raw":
@@ -1275,6 +1304,46 @@ export class QdrantPersistence {
     return entities;
   }
 
+  private filterRelationsByEntityTypes(relations: Relation[], allEntities: Entity[], entityTypes?: string[]): Relation[] {
+    if (!entityTypes || entityTypes.length === 0) return relations;
+    
+    // Exclude chunk types from entityTypes filtering
+    const knownChunkTypes = ["metadata", "implementation"];
+    const actualEntityTypes = entityTypes.filter(type => !knownChunkTypes.includes(type));
+    
+    if (actualEntityTypes.length === 0) return relations;
+    
+    const entityTypeMap = new Map();
+    allEntities.forEach(entity => entityTypeMap.set(entity.name, entity.entityType));
+    
+    console.log(`[MCP DEBUG] Filtering ${relations.length} relations by entity types: ${actualEntityTypes.join(', ')}`);
+    
+    const filtered = relations.filter(relation => {
+      const fromType = entityTypeMap.get(relation.from);
+      const toType = entityTypeMap.get(relation.to);
+      return actualEntityTypes.includes(fromType) || actualEntityTypes.includes(toType);
+    });
+    
+    console.log(`[MCP DEBUG] Filtered to ${filtered.length} relations involving specified entity types`);
+    return filtered;
+  }
+
+  private filterRelationsForEntities(relations: Relation[], entities: Entity[]): Relation[] {
+    // Create set of entity names for fast lookup
+    const entityNames = new Set(entities.map(e => e.name));
+    console.log(`[MCP DEBUG] Filtering ${relations.length} relations for ${entities.length} entities`);
+    console.log(`[MCP DEBUG] Entity names:`, Array.from(entityNames).slice(0, 5));
+    
+    // Only include relations where from OR to entity is in our filtered set
+    const filtered = relations.filter(relation => {
+      const matches = entityNames.has(relation.from) || entityNames.has(relation.to);
+      return matches;
+    });
+    
+    console.log(`[MCP DEBUG] Filtered to ${filtered.length} relevant relations`);
+    return filtered;
+  }
+
   private formatSmartEntityGraph(targetResult: any, relatedEntities: Entity[], relationships: Relation[]): any {
     const targetEntity = {
       name: targetResult.payload.entity_name,
@@ -1332,3 +1401,4 @@ export class QdrantPersistence {
     return { outgoing, incoming };
   }
 }
+// Test modification at Tue Jul 15 23:09:50 CEST 2025
