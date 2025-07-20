@@ -291,7 +291,7 @@ export class StreamingResponseBuilder {
     }
   ): Promise<StreamingGraphResponse> {
     const result = await this.fitContentToBudget(
-      { entities: [], relations: context.relations },
+      { entities: context.entities, relations: context.relations },
       context.budget,
       (content) => ({
         ...content,

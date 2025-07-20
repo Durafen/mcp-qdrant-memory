@@ -805,7 +805,7 @@ export class QdrantPersistence {
   }
 
   async scrollAll(options?: ScrollOptions): Promise<KnowledgeGraph | SmartGraph> {
-    await this.connect();
+    await this.initialize();  // Use initialize() instead of connect() to detect vector size
     if (!COLLECTION_NAME) {
       throw new Error("COLLECTION_NAME environment variable is required");
     }
@@ -818,6 +818,8 @@ export class QdrantPersistence {
     // First, get raw data from Qdrant with limit enforcement and entityTypes filtering
     const rawData = await this._getRawData(limitPerType, entityTypeFilter);
 
+    console.log(`DEBUG DEEP: rawData.entities first 3:`, rawData.entities.slice(0, 3).map(e => ({ name: e.name, entityType: e.entityType })));
+    console.log(`DEBUG DEEP: rawData.relations first 3:`, rawData.relations.slice(0, 3).map(r => ({ from: r.from, to: r.to, relationType: r.relationType })));
 
     // Qdrant already filtered by entityTypes, no additional filtering needed
     let filteredEntities = rawData.entities;
@@ -833,13 +835,42 @@ export class QdrantPersistence {
       console.log(`DEBUG: Relations after filtering:`, filteredRelations.length);
     }
 
-    // All modes now return raw data for streaming processing
-    // The streaming response builder handles mode-specific formatting with token limits
-    return { entities: filteredEntities, relations: filteredRelations };
+    // Apply mode-specific filtering before returning
+    switch (mode) {
+      case "relationships":
+        // For relationships mode, find entities that match the relation endpoints
+        const relationEntityNames = new Set<string>();
+        filteredRelations.forEach(rel => {
+          relationEntityNames.add(rel.from);
+          relationEntityNames.add(rel.to);
+        });
+        console.log(`DEBUG: relationships mode - searching for entities matching relation endpoints:`, Array.from(relationEntityNames).slice(0, 5));
+        
+        // Search for entities whose names match the relation endpoints
+        const matchedEntities = await this.fetchEntitiesByNames(Array.from(relationEntityNames), limitPerType);
+        console.log(`DEBUG: relationships mode - found ${matchedEntities.length} matching entities from ${relationEntityNames.size} relation endpoints`);
+        
+        // Filter relations to only include those connecting the matched entities
+        const matchedEntityNames = new Set(matchedEntities.map(e => e.name));
+        const matchedRelations = filteredRelations.filter(rel => 
+          matchedEntityNames.has(rel.from) && matchedEntityNames.has(rel.to)
+        );
+        console.log(`DEBUG: relationships mode - filtered from ${filteredRelations.length} to ${matchedRelations.length} relations connecting matched entities`);
+        
+        return { entities: matchedEntities, relations: matchedRelations };
+      
+      case "entities":
+      case "smart":
+      case "raw":
+      default:
+        // All other modes return all entities
+        return { entities: filteredEntities, relations: filteredRelations };
+    }
   }
 
   private async _getRawData(limit?: number, entityTypes?: string[]): Promise<{ entities: Entity[], relations: Relation[] }> {
     // Convert v2.4 chunks back to legacy format for read_graph compatibility
+    console.log(`DEBUG _getRawData: Starting with limit=${limit}, entityTypes=${JSON.stringify(entityTypes)}`);
     const entities: Entity[] = [];
     const relations: Relation[] = [];
     const allEntities: Entity[] = []; // Track all entities for relation type filtering
@@ -938,6 +969,10 @@ export class QdrantPersistence {
 
     // Filter relations by entity types if specified
     const filteredRelations = this.filterRelationsByEntityTypes(relations, allEntities, entityTypes);
+    
+    console.log(`DEBUG _getRawData: Returning ${entities.length} entities, ${filteredRelations.length} relations`);
+    console.log(`DEBUG _getRawData: Sample entities:`, entities.slice(0, 2).map(e => ({ name: e.name, entityType: e.entityType })));
+    console.log(`DEBUG _getRawData: Sample relations:`, filteredRelations.slice(0, 2).map(r => ({ from: r.from, to: r.to, relationType: r.relationType })));
     
     return { entities, relations: filteredRelations };
   }
@@ -1212,7 +1247,7 @@ export class QdrantPersistence {
       case "entities":
         return { entities, relations: relatedRelations };
       case "relationships":
-        return { entities: [], relations: relatedRelations };
+        return { entities, relations: relatedRelations };
       case "raw":
         return { entities, relations: relatedRelations };
       default:
