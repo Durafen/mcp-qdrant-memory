@@ -20,7 +20,7 @@ import {
 import { QdrantPersistence } from './persistence/qdrant.js';
 import { Entity, Relation, KnowledgeGraph, SmartGraph, ScrollOptions, StreamingGraphResponse, SearchResult } from './types.js';
 import { streamingResponseBuilder } from './streamingResponseBuilder.js';
-import { tokenCounter } from './tokenCounter.js';
+import { tokenCounter, TOKEN_CONFIG } from './tokenCounter.js';
 import { COLLECTION_NAME } from './config.js';
 import {
   validateCreateEntitiesRequest,
@@ -153,7 +153,7 @@ class KnowledgeGraphManager {
     }
   }
 
-  async searchSimilar(query: string, entityTypes?: string[], limit: number = 50): Promise<SearchResult[]> {
+  async searchSimilar(query: string, entityTypes?: string[], limit: number = 20): Promise<SearchResult[]> {
     // Ensure limit is a positive number, no hard cap
     const validLimit = Math.max(1, limit);
     return await this.qdrant.searchSimilar(query, entityTypes, validLimit);
@@ -373,7 +373,7 @@ class MemoryServer {
               },
               limit: { 
                 type: "number",
-                default: 50
+                default: 20
               }
             },
             required: ["query"]
@@ -549,9 +549,9 @@ class MemoryServer {
                   args.entityTypes,
                   tryLimit
                 );
-                return await streamingResponseBuilder.buildGenericStreamingResponse(results);
+                return await streamingResponseBuilder.buildGenericStreamingResponse(results, TOKEN_CONFIG.DEFAULT_TOKEN_LIMIT);
               },
-              args.limit || 50
+              args.limit || 20
             );
             
             return {
@@ -629,7 +629,7 @@ class MemoryServer {
   ): Promise<any> {
     const maxAttempts = 10;
     const reductionFactor = 0.7;
-    const tokenLimit = 25000;
+    const tokenLimit = TOKEN_CONFIG.DEFAULT_TOKEN_LIMIT; // Use consistent 23k limit
     
     let currentLimit = initialLimit;
     let attempts = 0;
