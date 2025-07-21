@@ -562,7 +562,7 @@ export class QdrantPersistence {
     }
 
     const firstResult = baseResults[0];
-    const filePath = firstResult.data.file_path;
+    const filePath = (firstResult.data as any).metadata?.file_path;
 
     // Use structured semantic metadata from indexing process if available
     const structuredMetadata = (firstResult.data as any).semantic_metadata;
@@ -1383,7 +1383,7 @@ export class QdrantPersistence {
     const targetEntity = {
       name: targetResult.payload.entity_name,
       type: targetResult.payload.entity_type,
-      file: targetResult.payload.file_path || 'unknown'
+      file: targetResult.payload.metadata?.file_path || 'unknown'
     };
 
     // Group entities by type
