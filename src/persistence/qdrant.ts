@@ -59,11 +59,13 @@ interface QdrantCollectionInfo {
 type Payload = ChunkPayload;
 
 function isMetadataChunk(payload: ChunkPayload): boolean {
+  // Extract entity_type from metadata (new format) or fallback to top-level (backward compatibility)
+  const entityType = (payload as any).metadata?.entity_type || payload.entity_type;
   return (
     payload.type === "chunk" &&
     payload.chunk_type === "metadata" &&
     typeof payload.entity_name === "string" &&
-    typeof payload.entity_type === "string"
+    typeof entityType === "string"
   );
 }
 
@@ -456,15 +458,19 @@ export class QdrantPersistence {
           score *= 1.4; // 40% boost for metadata chunks (progressive disclosure priority)
         } else if (payload.chunk_type === 'implementation') {
           score *= 1.2; // 20% boost for implementation chunks
-        } else if (payload.entity_type) {
-          // Research-validated entity type priorities for debugging workflow
-          const entityBoosts: Record<string, number> = {
-            'function': 1.3, 'class': 1.3, 'method': 1.3, // 30% - Core executable code
-            'interface': 1.15, 'type': 1.15,               // 15% - Contracts & types (IDD)
-            'const': 1.1, 'variable': 1.1,                // 10% - Configuration & state
-            'import': 1.05                                 // 5% - Dependencies
-          };
-          score *= entityBoosts[payload.entity_type] || 1.0;
+        } else {
+          // Extract entity_type from metadata (new format) or fallback to top-level (backward compatibility)
+          const entityType = (payload as any).metadata?.entity_type || payload.entity_type;
+          if (entityType) {
+            // Research-validated entity type priorities for debugging workflow
+            const entityBoosts: Record<string, number> = {
+              'function': 1.3, 'class': 1.3, 'method': 1.3, // 30% - Core executable code
+              'interface': 1.15, 'type': 1.15,               // 15% - Contracts & types (IDD)
+              'const': 1.1, 'variable': 1.1,                // 10% - Configuration & state
+              'import': 1.05                                 // 5% - Dependencies
+            };
+            score *= entityBoosts[entityType] || 1.0;
+          }
         }
           
         validResults.push({
@@ -915,16 +921,20 @@ export class QdrantPersistence {
                 const actualEntityTypes = entityTypes.filter(type => !knownChunkTypes.includes(type));
                 
                 if (actualEntityTypes.length > 0) {
-                  passesFilter = actualEntityTypes.includes(payload.entity_type);
+                  // Extract entity_type from metadata (new format) or fallback to top-level (backward compatibility)
+                  const entityType = (payload as any).metadata?.entity_type || payload.entity_type;
+                  passesFilter = actualEntityTypes.includes(entityType);
                 }
               }
               
               // Always track all entities for relation type filtering
               const entityName = (payload as any).entity_name || (payload as any).name || 'unknown';
+              // Extract entity_type from metadata (new format) or fallback to top-level (backward compatibility)
+              const entityType = (payload as any).metadata?.entity_type || payload.entity_type;
               const entity = {
                 name: entityName,
-                entityType: payload.entity_type,
-                observations: payload.observations || []
+                entityType: entityType,
+                observations: payload.observations || (payload as any).metadata?.observations || []
               };
               allEntities.push(entity);
               
@@ -1328,10 +1338,12 @@ export class QdrantPersistence {
       const payload = result.payload as unknown as ChunkPayload;
 
       if (isMetadataChunk(payload)) {
+        // Extract entity_type from metadata (new format) or fallback to top-level (backward compatibility)
+        const entityType = (payload as any).metadata?.entity_type || payload.entity_type;
         entities.push({
           name: payload.entity_name,
-          entityType: payload.entity_type,
-          observations: (payload as any).observations || []
+          entityType: entityType,
+          observations: (payload as any).observations || (payload as any).metadata?.observations || []
         });
       }
     }
@@ -1380,9 +1392,11 @@ export class QdrantPersistence {
   }
 
   private formatSmartEntityGraph(targetResult: any, relatedEntities: Entity[], relationships: Relation[]): any {
+    // Extract entity_type from metadata (new format) or fallback to top-level (backward compatibility)
+    const entityType = targetResult.payload.metadata?.entity_type || targetResult.payload.entity_type;
     const targetEntity = {
       name: targetResult.payload.entity_name,
-      type: targetResult.payload.entity_type,
+      type: entityType,
       file: targetResult.payload.metadata?.file_path || 'unknown'
     };
 

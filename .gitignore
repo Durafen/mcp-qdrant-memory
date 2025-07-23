@@ -44,3 +44,7 @@ qdrant_storage/
 .claude-indexer/
 test_mcp_*.sh
 test_mcp_*.js 
+memory_guard_debug_1.txt
+.gitignore
+memory_guard_debug_3.txt
+memory_guard_debug.txt
