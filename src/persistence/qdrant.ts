@@ -448,9 +448,6 @@ export class QdrantPersistence {
         // Handle v2.4 chunk format only
         // Handle both 'name' and 'entity_name' field variations
         const entityName = payload.entity_name || (payload as any).name || 'unknown';
-        const hasImplementation = payload.chunk_type === 'metadata' 
-          ? await this._checkImplementationExists(entityName)
-          : false;
 
         // Enhanced scoring system for progressive disclosure and debugging workflow
         let score = result.score;
@@ -479,7 +476,6 @@ export class QdrantPersistence {
           data: {
             ...payload,
             entity_name: entityName, // Normalize field name
-            has_implementation: hasImplementation,
             ...(payload.observations && { observations: payload.observations }) // Only include observations if they exist
           }
         });
