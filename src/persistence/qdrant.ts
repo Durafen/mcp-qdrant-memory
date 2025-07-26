@@ -397,10 +397,20 @@ export class QdrantPersistence {
       // Add entity_type filter if we have actual entity types
       if (actualEntityTypes.length > 0) {
         filterConditions.push({
-          key: "entity_type",
-          match: {
-            any: actualEntityTypes
-          }
+          should: [
+            {
+              key: "entity_type",
+              match: {
+                any: actualEntityTypes
+              }
+            },
+            {
+              key: "metadata.entity_type",
+              match: {
+                any: actualEntityTypes
+              }
+            }
+          ]
         });
       }
       
