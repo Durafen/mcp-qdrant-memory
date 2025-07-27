@@ -35,6 +35,7 @@ export interface SearchSimilarRequest {
   query: string;
   limit?: number;
   entityTypes?: string[];
+  searchMode?: 'semantic' | 'keyword' | 'hybrid';
 }
 
 export interface GetImplementationRequest {
@@ -164,7 +165,7 @@ export function validateSearchSimilarRequest(args: unknown): SearchSimilarReques
     throw new McpError(ErrorCode.InvalidParams, "Invalid request format");
   }
 
-  const { query, entityTypes, limit } = args;
+  const { query, entityTypes, limit, searchMode } = args;
   if (typeof query !== 'string') {
     throw new McpError(ErrorCode.InvalidParams, "Missing or invalid query string");
   }
@@ -179,7 +180,14 @@ export function validateSearchSimilarRequest(args: unknown): SearchSimilarReques
     }
   }
 
-  return { query, entityTypes, limit };
+  const validSearchModes = ['semantic', 'keyword', 'hybrid'];
+  if (searchMode !== undefined) {
+    if (typeof searchMode !== 'string' || !validSearchModes.includes(searchMode)) {
+      throw new McpError(ErrorCode.InvalidParams, "searchMode must be one of: semantic, keyword, hybrid");
+    }
+  }
+
+  return { query, entityTypes, limit, searchMode: searchMode as 'semantic' | 'keyword' | 'hybrid' | undefined };
 }
 
 export function validateGetImplementationRequest(args: unknown): GetImplementationRequest {

@@ -23,6 +23,7 @@
     "@qdrant/js-client-rest": "^1.13.0",
     "axios": "^1.8.1",
     "dotenv": "^16.3.1",
+    "okapibm25": "^1.4.1",
     "openai": "^4.24.1"
   },
   "devDependencies": {

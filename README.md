@@ -135,13 +135,19 @@ docker run -d \
 - `read_graph`: **Enhanced** - Get smart, filtered knowledge graph with NEW entity-specific filtering
 
 ### Progressive Disclosure Search (v2.4)
-- `search_similar`: **Enhanced** - Metadata-first search for 90% faster queries with unified entity/chunk type filtering
+- `search_similar`: **Enhanced** - Hybrid search by default with metadata-first approach for optimal code discovery
   ```typescript
   interface SearchParams {
     query: string;           // Search query text
     entityTypes?: string[];  // Unified filtering: entity types (class, function, documentation, text_chunk) + chunk types (metadata, implementation)
     limit?: number;          // Max results (default: 50)
+    searchMode?: string;     // Search mode: "semantic", "keyword", "hybrid" (default: "hybrid")
   }
+  
+  // Search Modes:
+  // "semantic": Dense vector search for conceptual understanding (0.6-0.8 scores)
+  // "keyword": BM25 sparse vector search for exact term matching (1.5+ scores)  
+  // "hybrid": Combined 70% semantic + 30% keyword for balanced results (0.4-1.2 scores)
   
   // Unified entityTypes parameter supports:
   // Entity Types: ["class", "function", "documentation", "text_chunk"]

@@ -22,6 +22,7 @@ import { Entity, Relation, KnowledgeGraph, SmartGraph, ScrollOptions, StreamingG
 import { streamingResponseBuilder } from './streamingResponseBuilder.js';
 import { tokenCounter, TOKEN_CONFIG } from './tokenCounter.js';
 import { COLLECTION_NAME } from './config.js';
+import { BM25Service } from './bm25/bm25Service.js';
 import {
   validateCreateEntitiesRequest,
   validateCreateRelationsRequest,
@@ -37,14 +38,45 @@ import {
 
 class KnowledgeGraphManager {
   private qdrant: QdrantPersistence;
+  private bm25Service: BM25Service;
 
   constructor() {
     this.qdrant = new QdrantPersistence();
+    this.bm25Service = new BM25Service({
+      k1: 1.2,
+      b: 0.75,
+    });
   }
 
   async initialize(): Promise<void> {
     // Initialize Qdrant - it's the sole source of truth
     await this.qdrant.initialize();
+    
+    // Initialize BM25 index with existing documents
+    await this.initializeBM25Index();
+  }
+
+  private async initializeBM25Index(): Promise<void> {
+    try {
+      // Get all documents from Qdrant for BM25 indexing - force raw mode to get KnowledgeGraph
+      const graph = await this.qdrant.scrollAll({ mode: 'raw' });
+      
+      // Convert entities to BM25 documents (only if we have a KnowledgeGraph)
+      const entities = 'entities' in graph ? graph.entities : [];
+      const bm25Documents = entities.map((entity: Entity) => ({
+        id: entity.name,
+        content: entity.observations?.join(' ') || entity.name,
+        entityType: entity.entityType,
+        observations: entity.observations || [],
+      }));
+
+      // Index documents in BM25 service
+      this.bm25Service.updateDocuments(bm25Documents);
+      
+      console.error(`BM25 index initialized with ${bm25Documents.length} documents`);
+    } catch (error) {
+      console.error('Failed to initialize BM25 index:', error);
+    }
   }
 
   // async save(): Promise<void> {
@@ -153,10 +185,10 @@ class KnowledgeGraphManager {
     }
   }
 
-  async searchSimilar(query: string, entityTypes?: string[], limit: number = 20): Promise<SearchResult[]> {
+  async searchSimilar(query: string, entityTypes?: string[], limit: number = 20, searchMode: 'semantic' | 'keyword' | 'hybrid' = 'semantic'): Promise<SearchResult[]> {
     // Ensure limit is a positive number, no hard cap
     const validLimit = Math.max(1, limit);
-    return await this.qdrant.searchSimilar(query, entityTypes, validLimit);
+    return await this.qdrant.searchSimilar(query, entityTypes, validLimit, searchMode);
   }
 
   async getImplementation(entityName: string, scope: 'minimal' | 'logical' | 'dependencies' = 'minimal', limit?: number): Promise<SearchResult[]> {
@@ -374,6 +406,12 @@ class MemoryServer {
               limit: { 
                 type: "number",
                 default: 20
+              },
+              searchMode: {
+                type: "string",
+                enum: ["semantic", "keyword", "hybrid"],
+                description: "Search mode: semantic (dense vectors), keyword (sparse vectors), hybrid (combined). Defaults to hybrid.",
+                default: "hybrid"
               }
             },
             required: ["query"]
@@ -547,7 +585,8 @@ class MemoryServer {
                 const results = await this.graphManager.searchSimilar(
                   args.query,
                   args.entityTypes,
-                  tryLimit
+                  tryLimit,
+                  args.searchMode || 'semantic'
                 );
                 return await streamingResponseBuilder.buildGenericStreamingResponse(results, TOKEN_CONFIG.DEFAULT_TOKEN_LIMIT);
               },
