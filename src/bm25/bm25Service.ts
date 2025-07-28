@@ -12,6 +12,10 @@ export interface BM25Document {
   content: string;
   entityType?: string;
   observations?: string[];
+  file_path?: string;
+  line_number?: number;
+  end_line_number?: number;
+  has_implementation?: boolean;
   [key: string]: any;
 }
 
@@ -93,12 +97,20 @@ export class BM25Service {
         }))
         .filter(result => result.score > 0); // Only include documents with positive scores
 
-      // Filter by entity types if specified
+      // Filter by entity types if specified (ignore chunk types - always return metadata)
       let filteredResults = results;
       if (entityTypes && entityTypes.length > 0) {
-        filteredResults = results.filter(result => 
-          entityTypes.includes(result.document.entityType || '')
-        );
+        // Separate entity types from chunk types
+        const knownChunkTypes = ["metadata", "implementation"];
+        const actualEntityTypes = entityTypes.filter(type => !knownChunkTypes.includes(type));
+        
+        // Only filter by actual entity types, ignore chunk type requests
+        if (actualEntityTypes.length > 0) {
+          filteredResults = results.filter(result => 
+            actualEntityTypes.includes(result.document.entityType || '')
+          );
+        }
+        // If only chunk types requested (metadata/implementation), return all results
       }
 
       // Sort by score (descending) and limit results
@@ -126,22 +138,33 @@ export class BM25Service {
   /**
    * Convert BM25SearchResult to SearchResult format
    */
-  static convertToSearchResult(bm25Result: BM25SearchResult): SearchResult {
+  static convertToSearchResult(bm25Result: BM25SearchResult, collectionName: string): SearchResult {
     const doc = bm25Result.document;
+    
+    // Read has_implementation from document metadata
+    const hasImplementation = doc.has_implementation || false;
+    
+    // Match exact structure from semantic search results - spread payload like processSearchResults does
     return {
       type: 'chunk',
       score: bm25Result.score,
       data: {
-        id: doc.id,
-        entity_name: doc.id, // Use ID as entity name for now
-        entity_type: doc.entityType || 'unknown',
-        chunk_type: 'metadata' as const, // BM25 primarily works with metadata
+        entity_name: doc.id,
+        chunk_type: 'metadata',
         content: doc.content,
-        content_hash: undefined,
-        file_path: doc.file_path || undefined,
-        line_number: doc.line_number || undefined,
-        has_implementation: false,
-      }
+        content_hash: doc.content_hash,
+        created_at: doc.created_at,
+        metadata: {
+          entity_type: doc.entityType || 'unknown',
+          file_path: doc.file_path || undefined,
+          line_number: doc.line_number || undefined,
+          end_line_number: doc.end_line_number || doc.line_number || undefined,
+          has_implementation: hasImplementation,
+          observations: doc.observations || []
+        },
+        collection: collectionName,
+        type: 'chunk'
+      } as any
     };
   }
 
@@ -171,13 +194,14 @@ export class HybridSearchFusion {
   static fuseResults(
     semanticResults: SearchResult[],
     keywordResults: BM25SearchResult[],
+    collectionName: string,
     semanticWeight: number = 0.7,
     keywordWeight: number = 0.3,
     rfrConstant: number = 60
   ): SearchResult[] {
     // Convert keyword results to SearchResult format
     const convertedKeywordResults = keywordResults.map(result => 
-      BM25Service.convertToSearchResult(result)
+      BM25Service.convertToSearchResult(result, collectionName)
     );
 
     // Create maps for efficient lookup

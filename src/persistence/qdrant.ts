@@ -431,7 +431,7 @@ export class QdrantPersistence {
     const bm25Results = this.bm25Service.search(query, limit, entityTypes);
     
     // Convert BM25 results to SearchResult format
-    return bm25Results.map(result => BM25Service.convertToSearchResult(result));
+    return bm25Results.map(result => BM25Service.convertToSearchResult(result, COLLECTION_NAME!));
   }
 
   private async performHybridSearch(query: string, entityTypes?: string[], limit: number = 20): Promise<SearchResult[]> {
@@ -445,6 +445,7 @@ export class QdrantPersistence {
     const hybridResults = HybridSearchFusion.fuseResults(
       semanticResults,
       keywordResults,
+      COLLECTION_NAME!,
       0.7, // semantic weight
       0.3, // keyword weight
       60   // RRF constant
@@ -564,29 +565,67 @@ export class QdrantPersistence {
   }
 
   private async initializeBM25Index(): Promise<void> {
-    // Check if BM25 service already has documents
+    // Always rebuild BM25 index to ensure entity names are included in content
     const stats = this.bm25Service.getStats();
-    if (stats.documentCount > 0) {
-      return; // Already initialized
-    }
+    console.error(`🔥 FORCE REBUILDING BM25 INDEX - was ${stats.documentCount} docs`);
+    this.bm25Service.clearDocuments();
+    
+    // Force clear any cached state
+    console.error(`🧹 BM25 cache cleared, rebuilding with entity names...`);
 
     try {
-      // Get all documents from Qdrant for BM25 indexing - force raw mode to get KnowledgeGraph
-      const graph = await this.scrollAll({ mode: 'raw' });
-      
-      // Convert entities to BM25 documents (only if we have a KnowledgeGraph)
-      const entities = 'entities' in graph ? graph.entities : [];
-      const bm25Documents = entities.map((entity: Entity) => ({
-        id: entity.name,
-        content: entity.observations?.join(' ') || entity.name,
-        entityType: entity.entityType,
-        observations: entity.observations || [],
+      await this.connect();
+      if (!COLLECTION_NAME) {
+        throw new Error("COLLECTION_NAME environment variable is required");
+      }
+
+      // Get all metadata chunks from Qdrant for BM25 indexing
+      const metadataChunks: any[] = [];
+      let offset: string | number | undefined = undefined;
+      const limit = 100;
+
+      do {
+        const scrollResult = await this.client.scroll(COLLECTION_NAME, {
+          limit,
+          offset,
+          with_payload: true,
+          with_vector: false,
+          filter: {
+            must: [
+              { key: "type", match: { value: "chunk" } },
+              { key: "chunk_type", match: { value: "metadata" } }
+            ]
+          }
+        });
+
+        for (const point of scrollResult.points) {
+          if (point.payload) {
+            metadataChunks.push(point.payload);
+          }
+        }
+
+        offset = (typeof scrollResult.next_page_offset === 'string' || typeof scrollResult.next_page_offset === 'number') 
+          ? scrollResult.next_page_offset 
+          : undefined;
+      } while (offset !== null && offset !== undefined);
+
+      // Convert metadata chunks to BM25 documents with complete metadata
+      const bm25Documents = metadataChunks.map((chunk: any) => ({
+        id: chunk.entity_name || chunk.id,
+        content: `${chunk.entity_name || chunk.id} ${chunk.content || ''}`.trim(),
+        entityType: chunk.metadata?.entity_type || chunk.entity_type || 'unknown',
+        observations: chunk.metadata?.observations || chunk.observations || [],
+        file_path: chunk.metadata?.file_path || chunk.file_path,
+        line_number: chunk.metadata?.line_number || chunk.line_number,
+        end_line_number: chunk.metadata?.end_line_number || chunk.end_line_number,
+        has_implementation: chunk.metadata?.has_implementation || chunk.has_implementation || false,
+        ...chunk, // Include all original chunk fields including content_hash, created_at
       }));
 
       // Index documents in BM25 service
       this.bm25Service.updateDocuments(bm25Documents);
       
-      console.error(`BM25 index initialized with ${bm25Documents.length} documents`);
+      console.error(`BM25 index initialized with ${bm25Documents.length} metadata chunks`);
     } catch (error) {
       console.error('Failed to initialize BM25 index:', error);
     }
