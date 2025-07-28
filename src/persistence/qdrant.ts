@@ -175,12 +175,13 @@ export class QdrantPersistence {
       const collectionInfo = (await this.client.getCollection(
         COLLECTION_NAME
       )) as QdrantCollectionInfo;
-      const currentVectorSize = collectionInfo.config?.params?.vectors?.size;
+      
+      // Handle both old (vectors.size) and new (vectors.dense.size) collection formats
+      const vectorConfig = collectionInfo.config?.params?.vectors as any;
+      const currentVectorSize = vectorConfig?.size || vectorConfig?.dense?.size;
 
       if (!currentVectorSize) {
-        console.error(`Collection '${COLLECTION_NAME}' has no vector configuration, recreating...`);
-        const defaultVectorSize = this.getDefaultVectorSize();
-        await this.recreateCollection(defaultVectorSize);
+        console.error(`Collection '${COLLECTION_NAME}' has no vector configuration - MCP server cannot create collections. Please index data first.`);
         return;
       }
 
@@ -414,7 +415,10 @@ export class QdrantPersistence {
     const filter = this.buildEntityTypeFilter(entityTypes);
 
     const results = await this.client.search(COLLECTION_NAME!, {
-      vector: queryVector,
+      vector: {
+        name: 'dense',
+        vector: queryVector
+      },
       limit,
       with_payload: true,
       filter
@@ -664,7 +668,10 @@ export class QdrantPersistence {
     try {
       // Search for implementation chunks for the specific entity
       const results = await this.client.search(COLLECTION_NAME!, {
-        vector: new Array(this.vectorSize).fill(0), // Dummy vector for filter-only search
+        vector: {
+          name: 'dense',
+          vector: new Array(this.vectorSize).fill(0) // Dummy vector for filter-only search
+        },
         limit: 50, // Optimized: Minimal scope maintained at 50 (no change needed)
         with_payload: true,
         filter: {
@@ -771,7 +778,10 @@ export class QdrantPersistence {
       
       // Also search for private helper functions (starting with _) in the same file
       const helperResults = await this.client.search(COLLECTION_NAME!, {
-        vector: new Array(this.vectorSize).fill(0),
+        vector: {
+          name: 'dense',
+          vector: new Array(this.vectorSize).fill(0)
+        },
         limit: limit || 12, // Optimized: Reduced from 25 to 12 to prevent token overflow
         with_payload: true,
         filter: {
@@ -827,7 +837,10 @@ export class QdrantPersistence {
     try {
       // Query for imported dependencies
       const dependencyResults = await this.client.search(COLLECTION_NAME!, {
-        vector: new Array(this.vectorSize).fill(0),
+        vector: {
+          name: 'dense',
+          vector: new Array(this.vectorSize).fill(0)
+        },
         limit: limit || 40,
         with_payload: true,
         filter: {
@@ -895,7 +908,10 @@ export class QdrantPersistence {
     try {
       // Quick existence check for implementation chunks
       const results = await this.client.search(COLLECTION_NAME!, {
-        vector: new Array(this.vectorSize).fill(0), // Dummy vector for filter-only search
+        vector: {
+          name: 'dense',
+          vector: new Array(this.vectorSize).fill(0) // Dummy vector for filter-only search
+        },
         limit: 1,
         with_payload: false,
         filter: {
@@ -1359,7 +1375,10 @@ export class QdrantPersistence {
 
     // Step 1: Check if target entity exists
     const targetEntityResults = await this.client.search(COLLECTION_NAME, {
-      vector: new Array(this.vectorSize).fill(0), // Dummy vector for filter-only search
+      vector: {
+        name: 'dense',
+        vector: new Array(this.vectorSize).fill(0) // Dummy vector for filter-only search
+      },
       limit: 1,
       with_payload: true,
       filter: {
@@ -1458,7 +1477,10 @@ export class QdrantPersistence {
     
     // Build OR filter for all entity names
     const results = await this.client.search(COLLECTION_NAME!, {
-      vector: new Array(this.vectorSize).fill(0), // Dummy vector for filter-only search
+      vector: {
+        name: 'dense',
+        vector: new Array(this.vectorSize).fill(0) // Dummy vector for filter-only search
+      },
       limit: tokenAwareLimit, // Token-aware limit instead of hardcoded 1000
       with_payload: true,
       filter: {
@@ -1587,6 +1609,46 @@ export class QdrantPersistence {
       }, {} as Record<string, number>);
 
     return { outgoing, incoming };
+  }
+
+  async getMetadataChunks(limit: number = 10000): Promise<any[]> {
+    await this.initialize();
+    if (!COLLECTION_NAME) {
+      throw new Error("COLLECTION_NAME environment variable is required");
+    }
+
+    const chunks: any[] = [];
+    let offset: string | number | undefined = undefined;
+    const batchSize = 100;
+    let collected = 0;
+
+    do {
+      const scrollResult = await this.client.scroll(COLLECTION_NAME, {
+        limit: Math.min(batchSize, limit - collected),
+        offset,
+        with_payload: true,
+        with_vector: false,
+        filter: {
+          must: [
+            { key: 'chunk_type', match: { value: 'metadata' } }
+          ]
+        }
+      });
+
+      for (const point of scrollResult.points) {
+        if (point.payload && collected < limit) {
+          chunks.push(point.payload);
+          collected++;
+        }
+      }
+
+      offset = (typeof scrollResult.next_page_offset === 'string' || typeof scrollResult.next_page_offset === 'number') 
+        ? scrollResult.next_page_offset 
+        : undefined;
+    } while (offset !== null && offset !== undefined && collected < limit);
+
+    console.error(`BM25 index initialized with ${chunks.length} metadata chunks`);
+    return chunks;
   }
 }
 // Test modification at Tue Jul 15 23:09:50 CEST 2025

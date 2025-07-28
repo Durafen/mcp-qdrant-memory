@@ -58,16 +58,15 @@ class KnowledgeGraphManager {
 
   private async initializeBM25Index(): Promise<void> {
     try {
-      // Get all documents from Qdrant for BM25 indexing - force raw mode to get KnowledgeGraph
-      const graph = await this.qdrant.scrollAll({ mode: 'raw' });
+      // Get metadata chunks directly from Qdrant for BM25 indexing
+      const metadataChunks = await this.qdrant.getMetadataChunks(10000);
       
-      // Convert entities to BM25 documents (only if we have a KnowledgeGraph)
-      const entities = 'entities' in graph ? graph.entities : [];
-      const bm25Documents = entities.map((entity: Entity) => ({
-        id: entity.name,
-        content: entity.observations?.join(' ') || entity.name,
-        entityType: entity.entityType,
-        observations: entity.observations || [],
+      // Convert chunks to BM25 documents
+      const bm25Documents = metadataChunks.map((chunk: any) => ({
+        id: chunk.entity_name,
+        content: chunk.content || chunk.entity_name,
+        entityType: chunk.metadata?.entity_type || 'unknown',
+        observations: chunk.observations || [],
       }));
 
       // Index documents in BM25 service
