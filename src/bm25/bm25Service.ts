@@ -60,14 +60,16 @@ export class BM25Service {
       const processedText = this.prepareText(searchableText);
       
       // Debug log for CoreIndexer specifically
-      if (doc.id && doc.id.includes('CoreIndexer')) {
-        console.error(`[BM25Service] DEBUG CoreIndexer:`, {
-          id: doc.id,
-          entityType: doc.entityType,
-          searchableText: searchableText.substring(0, 200) + '...',
-          processedText: processedText.substring(0, 200) + '...'
-        });
-      }
+      // if (doc.id && doc.id.includes('CoreIndexer')) {
+      //   console.error(`[💥 BM25 CORPUS DEBUG] CoreIndexer content flow:`, {
+      //     id: doc.id,
+      //     entityType: doc.entityType,
+      //     doc_content_first_100: doc.content?.substring(0, 100) + '...',
+      //     full_searchableText: searchableText,
+      //     final_processedText: processedText.substring(0, 150) + '...',
+      //     content_source: doc.content?.includes('Core Indexer') ? 'PROCESSED✅' : 'RAW_DATABASE❌'
+      //   });
+      // }
       
       return processedText;
     })];
@@ -109,7 +111,7 @@ export class BM25Service {
         return [];
       }
       
-      console.error(`[BM25Service] Searching for keywords: [${keywords.join(', ')}] in ${this.corpus.length} documents`);
+      // console.error(`[BM25Service] Searching for keywords: [${keywords.join(', ')}] in ${this.corpus.length} documents`);
       
       // Perform BM25 search  
       const scores = (BM25 as any).default(this.corpus, keywords, {

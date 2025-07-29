@@ -166,7 +166,7 @@ export class QdrantPersistence {
             distance: "Cosine",
           },
         });
-        console.error(`Created new collection '${COLLECTION_NAME}' with ${defaultVectorSize}-dimensional vectors`);
+        // console.error(`Created new collection '${COLLECTION_NAME}' with ${defaultVectorSize}-dimensional vectors`);
         this.vectorSize = defaultVectorSize;
         return;
       }
@@ -181,17 +181,17 @@ export class QdrantPersistence {
       const currentVectorSize = vectorConfig?.size || vectorConfig?.dense?.size;
 
       if (!currentVectorSize) {
-        console.error(`Collection '${COLLECTION_NAME}' has no vector configuration - MCP server cannot create collections. Please index data first.`);
+        // console.error(`Collection '${COLLECTION_NAME}' has no vector configuration - MCP server cannot create collections. Please index data first.`);
         return;
       }
 
-      console.error(`Using existing collection '${COLLECTION_NAME}' with ${currentVectorSize}-dimensional vectors`);
+      // console.error(`Using existing collection '${COLLECTION_NAME}' with ${currentVectorSize}-dimensional vectors`);
       
       // Update embedding model based on detected vector size
       this.updateEmbeddingModel(currentVectorSize);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown Qdrant error";
-      console.error("Failed to initialize collection:", message);
+      // console.error("Failed to initialize collection:", message);
       throw new Error(
         `Failed to initialize Qdrant collection. Please check server logs for details: ${message}`
       );
@@ -213,12 +213,12 @@ export class QdrantPersistence {
     
     // Update internal embedding model based on detected vector size
     if (vectorSize === 512) {
-      console.error("Detected Voyage embeddings (512-dim)");
+      // console.error("Detected Voyage embeddings (512-dim)");
       // Note: Would need to implement Voyage embedding generation
     } else if (vectorSize === 1536) {
-      console.error("Detected OpenAI embeddings (1536-dim)");
+      // console.error("Detected OpenAI embeddings (1536-dim)");
     } else {
-      console.error(`Unknown vector size: ${vectorSize}, using OpenAI embeddings`);
+      // console.error(`Unknown vector size: ${vectorSize}, using OpenAI embeddings`);
     }
   }
 
@@ -262,7 +262,7 @@ export class QdrantPersistence {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unknown OpenAI error";
-      console.error("OpenAI embedding error:", message);
+      // console.error("OpenAI embedding error:", message);
       throw new Error(`Failed to generate embeddings with OpenAI: ${message}`);
     }
   }
@@ -298,7 +298,7 @@ export class QdrantPersistence {
       return data.data[0].embedding;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown Voyage error";
-      console.error("Voyage embedding error:", message);
+      // console.error("Voyage embedding error:", message);
       throw new Error(`Failed to generate embeddings with Voyage: ${message}`);
     }
   }
@@ -354,7 +354,7 @@ export class QdrantPersistence {
         ],
       });
     } catch (error) {
-      console.error("Error persisting entity:", error);
+      // console.error("Error persisting entity:", error);
       throw error;
     }
   }
@@ -414,7 +414,7 @@ export class QdrantPersistence {
           throw new Error(`Unsupported search mode: ${searchMode}`);
       }
     } catch (error) {
-      console.error(`Search error (${searchMode}):`, error);
+      // console.error(`Search error (${searchMode}):`, error);
       return [];
     }
   }
@@ -451,11 +451,11 @@ export class QdrantPersistence {
   }
 
   private async performHybridSearch(query: string, entityTypes?: string[], limit: number = 20): Promise<SearchResult[]> {
-    console.error(`[HYBRID DEBUG] Starting hybrid search for query: "${query}", limit: ${limit}, entityTypes: ${JSON.stringify(entityTypes)}`);
+    // console.error(`[HYBRID DEBUG] Starting hybrid search for query: "${query}", limit: ${limit}, entityTypes: ${JSON.stringify(entityTypes)}`);
     
     // Get 20% more results from each search to improve fusion diversity
     const expandedLimit = Math.ceil(limit * 1.2);
-    console.error(`[HYBRID DEBUG] Using expanded limit: ${expandedLimit} (120% of ${limit}) for better fusion diversity`);
+    // console.error(`[HYBRID DEBUG] Using expanded limit: ${expandedLimit} (120% of ${limit}) for better fusion diversity`);
     
     // Perform both semantic and keyword searches in parallel with expanded limits
     const [semanticResults, keywordResults] = await Promise.all([
@@ -463,14 +463,14 @@ export class QdrantPersistence {
       Promise.resolve(this.bm25Service.search(query, expandedLimit, entityTypes)),
     ]);
 
-    console.error(`[HYBRID DEBUG] Semantic results: ${semanticResults.length} items`);
+    // console.error(`[HYBRID DEBUG] Semantic results: ${semanticResults.length} items`);
     semanticResults.slice(0, 3).forEach((result, idx) => {
-      console.error(`[HYBRID DEBUG] Semantic #${idx + 1}: ${result.data.entity_name} (score: ${result.score}) - data.id: ${result.data.id || 'MISSING'}`);
+      // console.error(`[HYBRID DEBUG] Semantic #${idx + 1}: ${result.data.entity_name} (score: ${result.score}) - data.id: ${result.data.id || 'MISSING'}`);
     });
 
-    console.error(`[HYBRID DEBUG] Keyword results: ${keywordResults.length} items`);
+    // console.error(`[HYBRID DEBUG] Keyword results: ${keywordResults.length} items`);
     keywordResults.slice(0, 3).forEach((result, idx) => {
-      console.error(`[HYBRID DEBUG] Keyword #${idx + 1}: ${result.document.id} (score: ${result.score}) - data.id: ${result.document.data?.id || 'MISSING'}`);
+      // console.error(`[HYBRID DEBUG] Keyword #${idx + 1}: ${result.document.id} (score: ${result.score}) - data.id: ${result.document.data?.id || 'MISSING'}`);
     });
 
     // Fuse results using Reciprocal Rank Fusion algorithm
@@ -483,13 +483,13 @@ export class QdrantPersistence {
       60   // RRF constant
     );
 
-    console.error(`[HYBRID DEBUG] Fused results: ${hybridResults.length} items`);
+    // console.error(`[HYBRID DEBUG] Fused results: ${hybridResults.length} items`);
     hybridResults.slice(0, 5).forEach((result, idx) => {
-      console.error(`[HYBRID DEBUG] Hybrid #${idx + 1}: ${result.data.entity_name} (score: ${result.score})`);
+      // console.error(`[HYBRID DEBUG] Hybrid #${idx + 1}: ${result.data.entity_name} (score: ${result.score})`);
     });
 
     const finalResults = hybridResults.slice(0, limit);
-    console.error(`[HYBRID DEBUG] Final results after limit: ${finalResults.length} items`);
+    // console.error(`[HYBRID DEBUG] Final results after limit: ${finalResults.length} items`);
     
     return finalResults;
   }
@@ -630,7 +630,7 @@ export class QdrantPersistence {
 
       do {
         batchCount++;
-        console.error(`[DEBUG] BM25 Batch ${batchCount}: starting with offset=${offset}, collected=${metadataChunks.length} docs so far`);
+        // console.error(`[DEBUG] BM25 Batch ${batchCount}: starting with offset=${offset}, collected=${metadataChunks.length} docs so far`);
         
         const scrollResult = await this.client.scroll(COLLECTION_NAME, {
           limit,
@@ -645,7 +645,7 @@ export class QdrantPersistence {
           }
         });
 
-        console.error(`[DEBUG] BM25 Batch ${batchCount}: scroll returned ${scrollResult.points.length} points, next_offset=${scrollResult.next_page_offset} (type: ${typeof scrollResult.next_page_offset})`);
+        // console.error(`[DEBUG] BM25 Batch ${batchCount}: scroll returned ${scrollResult.points.length} points, next_offset=${scrollResult.next_page_offset} (type: ${typeof scrollResult.next_page_offset})`);
 
         for (const point of scrollResult.points) {
           if (point.payload) {
@@ -653,36 +653,34 @@ export class QdrantPersistence {
           }
         }
 
-        console.error(`[DEBUG] BM25 Batch ${batchCount}: after processing, collected=${metadataChunks.length} total documents`);
+        // console.error(`[DEBUG] BM25 Batch ${batchCount}: after processing, collected=${metadataChunks.length} total documents`);
 
         offset = (typeof scrollResult.next_page_offset === 'string' || typeof scrollResult.next_page_offset === 'number' || typeof scrollResult.next_page_offset === 'bigint') 
           ? scrollResult.next_page_offset 
           : undefined;
           
-        console.error(`[DEBUG] BM25 Batch ${batchCount}: next offset=${offset}, will continue=${offset !== null && offset !== undefined && metadataChunks.length < 50000}`);
+        // console.error(`[DEBUG] BM25 Batch ${batchCount}: next offset=${offset}, will continue=${offset !== null && offset !== undefined && metadataChunks.length < 50000}`);
         
       } while (offset !== null && offset !== undefined && metadataChunks.length < 50000); // Safety limit to prevent infinite loops
       
       console.error(`[DEBUG] BM25 loop finished: ${batchCount} batches, ${metadataChunks.length} total documents collected`);
 
-      // Convert metadata chunks to BM25 documents with complete metadata
+      // Convert metadata chunks to BM25 documents with complete metadata  
       const bm25Documents = metadataChunks.map((chunk: any) => {
-        const firstObs = chunk.metadata?.observations?.[0];
-        const cleanedObs = firstObs?.replace(/^[^:]+:\s*/, '');
-        const finalContent = `${chunk.entity_name || chunk.id} ${cleanedObs || chunk.content || ''}`.trim();
+        const entityName = chunk.entity_name || chunk.id;
+        const finalContent = chunk.content || '';
         
-        // Debug CoreIndexer chunks
-        if (chunk.entity_name === 'CoreIndexer') {
-          console.error('[DEBUG] CoreIndexer BM25 content processing:', {
-            entity_name: chunk.entity_name,
-            has_metadata: !!chunk.metadata,
-            has_observations: !!chunk.metadata?.observations,
-            observations_length: chunk.metadata?.observations?.length || 0,
-            first_observation: firstObs,
-            cleaned_observation: cleanedObs,
-            fallback_content: chunk.content,
+        // Debug processing (using Python pre-formatted content)
+        if (entityName?.includes('CoreIndexer') || entityName === 'CoreIndexer') {
+          console.error('[🔍 BM25 CONTENT DEBUG] Processing chunk:', {
+            entity_name: entityName,
+            python_formatted_content: chunk.content?.substring(0, 150) + '...',
             final_content: finalContent,
-            content_source: cleanedObs ? 'cleaned_observation' : 'fallback_content'
+            metadata_structure: {
+              has_metadata: !!chunk.metadata,
+              has_observations: !!chunk.metadata?.observations,
+              observations_count: chunk.metadata?.observations?.length || 0
+            }
           });
         }
         
@@ -1598,7 +1596,7 @@ export class QdrantPersistence {
     const entityTypeMap = new Map();
     allEntities.forEach(entity => entityTypeMap.set(entity.name, entity.entityType));
     
-    console.error(`[MCP DEBUG] Filtering ${relations.length} relations by entity types: ${actualEntityTypes.join(', ')}`);
+    // console.error(`[MCP DEBUG] Filtering ${relations.length} relations by entity types: ${actualEntityTypes.join(', ')}`);
     
     const filtered = relations.filter(relation => {
       const fromType = entityTypeMap.get(relation.from);
@@ -1606,15 +1604,15 @@ export class QdrantPersistence {
       return actualEntityTypes.includes(fromType) || actualEntityTypes.includes(toType);
     });
     
-    console.error(`[MCP DEBUG] Filtered to ${filtered.length} relations involving specified entity types`);
+    // console.error(`[MCP DEBUG] Filtered to ${filtered.length} relations involving specified entity types`);
     return filtered;
   }
 
   private filterRelationsForEntities(relations: Relation[], entities: Entity[]): Relation[] {
     // Create set of entity names for fast lookup
     const entityNames = new Set(entities.map(e => e.name));
-    console.error(`[MCP DEBUG] Filtering ${relations.length} relations for ${entities.length} entities`);
-    console.error(`[MCP DEBUG] Entity names:`, Array.from(entityNames).slice(0, 5));
+    // console.error(`[MCP DEBUG] Filtering ${relations.length} relations for ${entities.length} entities`);
+    // console.error(`[MCP DEBUG] Entity names:`, Array.from(entityNames).slice(0, 5));
     
     // Only include relations where from OR to entity is in our filtered set
     const filtered = relations.filter(relation => {
@@ -1622,7 +1620,7 @@ export class QdrantPersistence {
       return matches;
     });
     
-    console.error(`[MCP DEBUG] Filtered to ${filtered.length} relevant relations`);
+    // console.error(`[MCP DEBUG] Filtered to ${filtered.length} relevant relations`);
     return filtered;
   }
 
