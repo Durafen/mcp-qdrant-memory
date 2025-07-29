@@ -569,7 +569,7 @@ export class QdrantPersistence {
     return validResults;
   }
 
-  private async initializeBM25Index(): Promise<void> {
+  async initializeBM25Index(): Promise<void> {
     // Always rebuild BM25 index to ensure entity names are included in content
     const stats = this.bm25Service.getStats();
     console.error(`🔥 FORCE REBUILDING BM25 INDEX - was ${stats.documentCount} docs`);
@@ -589,8 +589,14 @@ export class QdrantPersistence {
       const metadataChunks: any[] = [];
       let offset: string | number | undefined = undefined;
       const limit = 100;
+      let batchCount = 0;
+
+      console.error(`[DEBUG] Starting BM25 data collection loop with limit=${limit}`);
 
       do {
+        batchCount++;
+        console.error(`[DEBUG] BM25 Batch ${batchCount}: starting with offset=${offset}, collected=${metadataChunks.length} docs so far`);
+        
         const scrollResult = await this.client.scroll(COLLECTION_NAME, {
           limit,
           offset,
@@ -604,16 +610,25 @@ export class QdrantPersistence {
           }
         });
 
+        console.error(`[DEBUG] BM25 Batch ${batchCount}: scroll returned ${scrollResult.points.length} points, next_offset=${scrollResult.next_page_offset} (type: ${typeof scrollResult.next_page_offset})`);
+
         for (const point of scrollResult.points) {
           if (point.payload) {
             metadataChunks.push(point.payload);
           }
         }
 
-        offset = (typeof scrollResult.next_page_offset === 'string' || typeof scrollResult.next_page_offset === 'number') 
+        console.error(`[DEBUG] BM25 Batch ${batchCount}: after processing, collected=${metadataChunks.length} total documents`);
+
+        offset = (typeof scrollResult.next_page_offset === 'string' || typeof scrollResult.next_page_offset === 'number' || typeof scrollResult.next_page_offset === 'bigint') 
           ? scrollResult.next_page_offset 
           : undefined;
-      } while (offset !== null && offset !== undefined);
+          
+        console.error(`[DEBUG] BM25 Batch ${batchCount}: next offset=${offset}, will continue=${offset !== null && offset !== undefined && metadataChunks.length < 50000}`);
+        
+      } while (offset !== null && offset !== undefined && metadataChunks.length < 50000); // Safety limit to prevent infinite loops
+      
+      console.error(`[DEBUG] BM25 loop finished: ${batchCount} batches, ${metadataChunks.length} total documents collected`);
 
       // Convert metadata chunks to BM25 documents with complete metadata
       const bm25Documents = metadataChunks.map((chunk: any) => ({
