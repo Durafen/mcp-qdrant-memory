@@ -117,12 +117,32 @@ export class BM25Service {
         b: this.config.b!,
       }) as number[];
       
-      // Create results with scores
+      // Create results with scores and entity-type weighting
       const results: BM25SearchResult[] = this.documents
-        .map((doc, index) => ({
-          document: doc,
-          score: scores[index] || 0,
-        }))
+        .map((doc, index) => {
+          let baseScore = scores[index] || 0;
+          
+          // Apply entity-type weighted scoring to prioritize semantic importance
+          if (baseScore > 0) {
+            const entityType = doc.entityType || 'unknown';
+            
+            // Boost important entity types
+            if (entityType === 'class') {
+              baseScore *= 2.0; // 2x boost for class definitions
+            } else if (entityType === 'function') {
+              baseScore *= 1.5; // 1.5x boost for function definitions
+            } else if (entityType === 'interface') {
+              baseScore *= 1.8; // 1.8x boost for interface definitions
+            } else if (entityType === 'text_chunk' && doc.content?.includes('Import:')) {
+              baseScore *= 0.5; // 0.5x penalty for import statements
+            }
+          }
+          
+          return {
+            document: doc,
+            score: baseScore,
+          };
+        })
         .filter(result => result.score > 0); // Only include documents with positive scores
 
       // Filter by entity types if specified (ignore chunk types - always return metadata)

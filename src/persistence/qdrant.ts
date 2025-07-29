@@ -311,41 +311,52 @@ export class QdrantPersistence {
   }
 
   async persistEntity(entity: Entity) {
-    await this.connect();
-    if (!COLLECTION_NAME) {
-      throw new Error("COLLECTION_NAME environment variable is required");
-    }
+    try {
+      await this.connect();
+      
+      if (!COLLECTION_NAME) {
+        throw new Error("COLLECTION_NAME environment variable is required");
+      }
 
-    const text = `${entity.name} (${
-      entity.entityType
-    }): ${(entity.observations || []).join(". ")}`;
-    const vector = await this.generateEmbedding(text);
-    
-    // Use consistent chunk ID format: {file_path}::{entity_name}::metadata
-    // For manual entities without file_path, use "manual" as file identifier
-    const idStr = `manual::${entity.name}::metadata`;
-    const id = await this.hashString(idStr);
+      const text = `${entity.name} (${
+        entity.entityType
+      }): ${(entity.observations || []).join(". ")}`;
+      
+      const vector = await this.generateEmbedding(text);
+      
+      // Use consistent chunk ID format: {file_path}::{entity_name}::metadata
+      // For manual entities without file_path, use "manual" as file identifier
+      const idStr = `manual::${entity.name}::metadata`;
+      const id = await this.hashString(idStr);
 
-    const payload = {
-      type: "chunk",
-      chunk_type: "metadata",
-      entity_name: entity.name,
-      entity_type: entity.entityType,
-      observations: entity.observations || [],  // Store as array for MCP compatibility
-      content: (entity.observations || []).join(". "),  // Keep joined text for embedding
-      file_path: undefined, // Could be extracted from observations if needed
-      created_at: new Date().toISOString()
-    };
-
-    await this.client.upsert(COLLECTION_NAME, {
-      points: [
-        {
-          id,
-          vector,
-          payload: payload as Record<string, unknown>,
+      const payload = {
+        type: "chunk",
+        chunk_type: "metadata",
+        entity_name: entity.name,
+        metadata: {
+          entity_type: entity.entityType,
+          observations: entity.observations || []
         },
-      ],
-    });
+        content: (entity.observations || []).join(". "),  // Keep joined text for embedding
+        file_path: undefined, // Could be extracted from observations if needed
+        created_at: new Date().toISOString()
+      };
+      
+      await this.client.upsert(COLLECTION_NAME, {
+        points: [
+          {
+            id,
+            vector: {
+              dense: vector
+            },
+            payload: payload as Record<string, unknown>,
+          },
+        ],
+      });
+    } catch (error) {
+      console.error("Error persisting entity:", error);
+      throw error;
+    }
   }
 
   async persistRelation(relation: Relation) {
@@ -442,10 +453,14 @@ export class QdrantPersistence {
   private async performHybridSearch(query: string, entityTypes?: string[], limit: number = 20): Promise<SearchResult[]> {
     console.error(`[HYBRID DEBUG] Starting hybrid search for query: "${query}", limit: ${limit}, entityTypes: ${JSON.stringify(entityTypes)}`);
     
-    // Perform both semantic and keyword searches in parallel
+    // Get 20% more results from each search to improve fusion diversity
+    const expandedLimit = Math.ceil(limit * 1.2);
+    console.error(`[HYBRID DEBUG] Using expanded limit: ${expandedLimit} (120% of ${limit}) for better fusion diversity`);
+    
+    // Perform both semantic and keyword searches in parallel with expanded limits
     const [semanticResults, keywordResults] = await Promise.all([
-      this.performSemanticSearch(query, entityTypes, limit),
-      Promise.resolve(this.bm25Service.search(query, limit, entityTypes)),
+      this.performSemanticSearch(query, entityTypes, expandedLimit),
+      Promise.resolve(this.bm25Service.search(query, expandedLimit, entityTypes)),
     ]);
 
     console.error(`[HYBRID DEBUG] Semantic results: ${semanticResults.length} items`);
