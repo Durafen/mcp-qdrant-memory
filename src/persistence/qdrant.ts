@@ -586,6 +586,11 @@ export class QdrantPersistence {
           }
         }
           
+        // Debug payload metadata
+        if (payload.metadata?.content_bm25) {
+          console.error(`[🔍 PAYLOAD DEBUG] Entity: ${entityName}, payload.metadata has content_bm25: ${payload.metadata.content_bm25}`);
+        }
+        
         validResults.push({
           type: 'chunk',
           score: score,
@@ -668,7 +673,10 @@ export class QdrantPersistence {
       // Convert metadata chunks to BM25 documents with complete metadata  
       const bm25Documents = metadataChunks.map((chunk: any) => {
         const entityName = chunk.entity_name || chunk.id;
-        const finalContent = chunk.content || '';
+        const finalContent = chunk.metadata?.content_bm25 || chunk.content || '';
+        
+        // Debug final content selection
+        console.error(`[🔍 FINAL CONTENT DEBUG] Entity: ${entityName}, has_content_bm25: ${!!chunk.metadata?.content_bm25}, finalContent: "${finalContent}"`);
         
         // Debug processing (using Python pre-formatted content)
         if (entityName?.includes('CoreIndexer') || entityName === 'CoreIndexer') {

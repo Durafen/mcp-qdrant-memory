@@ -206,12 +206,11 @@ export class BM25Service {
         content_hash: doc.content_hash,
         created_at: doc.created_at,
         metadata: {
-          entity_type: doc.entityType || 'unknown',
-          file_path: doc.file_path || undefined,
-          line_number: doc.line_number || undefined,
-          end_line_number: doc.end_line_number || doc.line_number || undefined,
-          has_implementation: hasImplementation,
-          observations: doc.observations || []
+          // Spread all metadata fields from document to match semantic search exactly
+          ...doc.metadata,
+          // Override/ensure critical fields
+          entity_type: doc.entityType || doc.metadata?.entity_type || 'unknown',
+          has_implementation: hasImplementation
         },
         collection: collectionName,
         type: 'chunk'
