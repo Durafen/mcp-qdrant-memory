@@ -28,7 +28,9 @@ This enhanced version of the MCP-Qdrant-Memory server provides enterprise-grade 
 - **Priority Scoring**: Surfaces public APIs and documented code first
 - **Structured Responses**: Summary + API surface + dependencies + relationships
 
-### 🚀 Performance & Scalability  
+### 🚀 Performance & Scalability with BM25 Hybrid Search
+- **BM25 Integration**: OkapiBM25 algorithm for exact keyword matching
+- **Hybrid Search**: Reciprocal Rank Fusion (70% semantic + 30% BM25)
 - **Large Collection Support**: Efficiently handles 1000+ entities via scroll API
 - **Priority-based Selection**: Most important code components prioritized
 - **Token Compliance**: Intelligent summarization prevents token limit overflow
@@ -286,6 +288,22 @@ const logical = await get_implementation("parseAST", "logical");
 
 // Get parseAST + external dependencies (TreeSitter.parse, ast.walk, etc.)
 const dependencies = await get_implementation("parseAST", "dependencies");
+```
+
+### BM25 Hybrid Search Examples (NEW)
+
+```python
+# Semantic search - best for conceptual queries
+mcp__your_collection__search_similar("user authentication system", [], 10, "semantic")
+# Returns: Entities matching authentication concepts with 0.6-0.8 similarity scores
+
+# BM25 keyword search - best for exact terms  
+mcp__your_collection__search_similar("validateToken JWT decode", [], 10, "keyword")
+# Returns: Entities containing these exact terms with 1.5+ BM25 scores
+
+# Hybrid search - balanced approach (default)
+mcp__your_collection__search_similar("password validation logic", [], 10, "hybrid")
+# Returns: RRF fusion of 70% semantic + 30% BM25 with 0.4-1.2 combined scores
 ```
 
 ### Smart Mode Response Structure

@@ -134,8 +134,8 @@ docker run -d \
 - `delete_relations`: Delete specific relations
 - `read_graph`: **Enhanced** - Get smart, filtered knowledge graph with NEW entity-specific filtering
 
-### Progressive Disclosure Search (v2.4)
-- `search_similar`: **Enhanced** - Hybrid search by default with metadata-first approach for optimal code discovery
+### Progressive Disclosure Search (v2.4) with BM25 Hybrid Search
+- `search_similar`: **Enhanced** - BM25 hybrid search by default with metadata-first approach for optimal code discovery
   ```typescript
   interface SearchParams {
     query: string;           // Search query text
@@ -144,16 +144,28 @@ docker run -d \
     searchMode?: string;     // Search mode: "semantic", "keyword", "hybrid" (default: "hybrid")
   }
   
-  // Search Modes:
+  // Search Modes (OkapiBM25 algorithm implementation):
   // "semantic": Dense vector search for conceptual understanding (0.6-0.8 scores)
   // "keyword": BM25 sparse vector search for exact term matching (1.5+ scores)  
-  // "hybrid": Combined 70% semantic + 30% keyword for balanced results (0.4-1.2 scores)
+  // "hybrid": RRF fusion 70% semantic + 30% BM25 for balanced results (0.4-1.2 scores)
   
   // Unified entityTypes parameter supports:
   // Entity Types: ["class", "function", "documentation", "text_chunk"]
   // Chunk Types: ["metadata", "implementation"]  
   // Mixed Arrays: ["function", "metadata", "implementation"] (OR logic)
   ```
+
+**Search Mode Examples:**
+```python
+# Semantic search - best for conceptual queries
+mcp__your_collection__search_similar("authentication functions", [], 10, "semantic")
+
+# BM25 keyword search - best for exact terms
+mcp__your_collection__search_similar("JWT validateToken", [], 10, "keyword") 
+
+# Hybrid search - balanced approach (default)
+mcp__your_collection__search_similar("user login validation", [], 10, "hybrid")
+```
 
 - `get_implementation`: **ENHANCED** - Semantic scope implementation access (v2.4.1)
   ```typescript
@@ -169,15 +181,15 @@ docker run -d \
   - **`dependencies`**: Returns entity + imported modules and called functions (cross-file relationships)
   
   **Usage Examples:**
-  ```typescript
-  // Get just the parseAST function implementation
-  await get_implementation("parseAST")
+  ```python
+  # Get just the parseAST function implementation
+  mcp__your_collection__get_implementation("parseAST")
   
-  // Get parseAST + its same-file helpers (_extract_nodes, _validate_syntax)
-  await get_implementation("parseAST", "logical")
+  # Get parseAST + its same-file helpers (_extract_nodes, _validate_syntax)
+  mcp__your_collection__get_implementation("parseAST", "logical")
   
-  // Get parseAST + external dependencies (TreeSitter.parse, ast.walk, etc.)
-  await get_implementation("parseAST", "dependencies")
+  # Get parseAST + external dependencies (TreeSitter.parse, ast.walk, etc.)
+  mcp__your_collection__get_implementation("parseAST", "dependencies")
   ```
 
 ## Implementation Details
@@ -249,66 +261,39 @@ interface Entity {
 
 ## Example Usage
 
-```typescript
-// Entity-specific graph filtering (NEW v2.7)
-const entityGraph = await client.callTool("read_graph", {
-  entity: "AuthService",      // Focus on specific entity
-  mode: "smart"              // AI summary of connections
-});
-// Returns: AI-powered summary with connection stats and relationship breakdown
+```python
+# Entity-specific graph filtering (NEW v2.7)
+mcp__your_collection__read_graph(entity="AuthService", mode="smart")
+# Returns: AI-powered summary with connection stats and relationship breakdown
 
-// Debug specific function relationships
-const relationshipGraph = await client.callTool("read_graph", {
-  entity: "process_login",
-  mode: "relationships"      // Only relations involving entity
-});
-// Returns: 10-20 focused relations instead of 300+ scattered ones
+# Debug specific function relationships
+mcp__your_collection__read_graph(entity="process_login", mode="relationships")
+# Returns: 10-20 focused relations instead of 300+ scattered ones
 
-// Find entities connected to specific component
-const connectionGraph = await client.callTool("read_graph", {
-  entity: "validate_token",
-  mode: "entities"          // Connected entities only
-});
+# Find entities connected to specific component
+mcp__your_collection__read_graph(entity="validate_token", mode="entities")
 
-// General graph views (backward compatible)
-const smartGraph = await client.callTool("read_graph", {
-  mode: "smart",           // AI-optimized view (default)
-  limit: 20               // Max entities per type
-});
+# General graph views (backward compatible)
+mcp__your_collection__read_graph(mode="smart", limit=20)
+# AI-optimized view with max 20 entities per type
 
-// Entity type filtering
-const classes = await client.callTool("read_graph", {
-  mode: "entities",
-  entityTypes: ["class", "function"],
-  limit: 10
-});
+# Entity type filtering
+mcp__your_collection__read_graph(mode="entities", entityTypes=["class", "function"], limit=10)
 
-// Unified entityTypes filtering - entity types only
-const entityResults = await client.callTool("search_similar", {
-  query: "development tasks",
-  entityTypes: ["function", "class"], // Filter by specific entity types
-  limit: 5
-});
+# Unified entityTypes filtering - entity types only
+mcp__your_collection__search_similar("development tasks", ["function", "class"], 5)
+# Filter by specific entity types
 
-// Unified entityTypes filtering - chunk types only  
-const metadataResults = await client.callTool("search_similar", {
-  query: "authentication",
-  entityTypes: ["metadata"], // Fast metadata-only search
-  limit: 10
-});
+# Unified entityTypes filtering - chunk types only  
+mcp__your_collection__search_similar("authentication", ["metadata"], 10)
+# Fast metadata-only search
 
-// Unified entityTypes filtering - mixed types (OR logic)
-const mixedResults = await client.callTool("search_similar", {
-  query: "authentication",
-  entityTypes: ["function", "metadata", "implementation"], // Returns functions OR metadata OR implementation chunks
-  limit: 10
-});
+# Unified entityTypes filtering - mixed types (OR logic)
+mcp__your_collection__search_similar("authentication", ["function", "metadata", "implementation"], 10)
+# Returns functions OR metadata OR implementation chunks
 
-// Search without filtering (returns all entity and chunk types)
-const allResults = await client.callTool("search_similar", {
-  query: "authentication",
-  limit: 10
-});
+# Search without filtering (returns all entity and chunk types)
+mcp__your_collection__search_similar("authentication", [], 10)
 ```
 
 ### 🎯 Smart Mode Features
