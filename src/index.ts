@@ -22,6 +22,7 @@ import { Entity, Relation, KnowledgeGraph, SmartGraph, ScrollOptions, StreamingG
 import { streamingResponseBuilder } from './streamingResponseBuilder.js';
 import { tokenCounter, TOKEN_CONFIG } from './tokenCounter.js';
 import { COLLECTION_NAME } from './config.js';
+import { BM25Service } from './bm25/bm25Service.js';
 import {
   validateCreateEntitiesRequest,
   validateCreateRelationsRequest,
@@ -37,15 +38,24 @@ import {
 
 class KnowledgeGraphManager {
   private qdrant: QdrantPersistence;
+  private bm25Service: BM25Service;
 
   constructor() {
     this.qdrant = new QdrantPersistence();
+    this.bm25Service = new BM25Service({
+      k1: 1.2,
+      b: 0.75,
+    });
   }
 
   async initialize(): Promise<void> {
     // Initialize Qdrant - it's the sole source of truth
     await this.qdrant.initialize();
+    
+    // Initialize BM25 index with existing documents using qdrant.ts implementation
+    await this.qdrant.initializeBM25Index();
   }
+
 
   // async save(): Promise<void> {
   //   await fs.writeFile(MEMORY_FILE_PATH, JSON.stringify(this.graph, null, 2));
@@ -153,10 +163,10 @@ class KnowledgeGraphManager {
     }
   }
 
-  async searchSimilar(query: string, entityTypes?: string[], limit: number = 20): Promise<SearchResult[]> {
+  async searchSimilar(query: string, entityTypes?: string[], limit: number = 20, searchMode: 'semantic' | 'keyword' | 'hybrid' = 'semantic'): Promise<SearchResult[]> {
     // Ensure limit is a positive number, no hard cap
     const validLimit = Math.max(1, limit);
-    return await this.qdrant.searchSimilar(query, entityTypes, validLimit);
+    return await this.qdrant.searchSimilar(query, entityTypes, validLimit, searchMode);
   }
 
   async getImplementation(entityName: string, scope: 'minimal' | 'logical' | 'dependencies' = 'minimal', limit?: number): Promise<SearchResult[]> {
@@ -374,6 +384,12 @@ class MemoryServer {
               limit: { 
                 type: "number",
                 default: 20
+              },
+              searchMode: {
+                type: "string",
+                enum: ["semantic", "keyword", "hybrid"],
+                description: "Search mode: semantic (dense vectors), keyword (sparse vectors), hybrid (combined). Defaults to hybrid.",
+                default: "hybrid"
               }
             },
             required: ["query"]
@@ -547,7 +563,8 @@ class MemoryServer {
                 const results = await this.graphManager.searchSimilar(
                   args.query,
                   args.entityTypes,
-                  tryLimit
+                  tryLimit,
+                  args.searchMode || 'semantic'
                 );
                 return await streamingResponseBuilder.buildGenericStreamingResponse(results, TOKEN_CONFIG.DEFAULT_TOKEN_LIMIT);
               },

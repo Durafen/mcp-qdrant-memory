@@ -35,6 +35,7 @@ export interface SearchSimilarRequest {
   query: string;
   limit?: number;
   entityTypes?: string[];
+  searchMode?: 'semantic' | 'keyword' | 'hybrid';
 }
 
 export interface GetImplementationRequest {
@@ -52,12 +53,15 @@ function isStringArray(value: unknown): value is string[] {
 
 function isEntity(value: unknown): value is Entity {
   if (!isRecord(value)) return false;
-  return (
-    typeof value.name === 'string' &&
-    typeof value.entityType === 'string' &&
-    Array.isArray(value.observations) &&
-    value.observations.every(obs => typeof obs === 'string')
-  );
+  
+  // Support both entityType (camelCase) and entity_type (snake_case)
+  const entityType = (value as any).entityType || (value as any).entity_type;
+  
+  const nameOk = typeof (value as any).name === 'string';
+  const typeOk = typeof entityType === 'string';
+  const obsOk = Array.isArray((value as any).observations) && (value as any).observations.every((obs: any) => typeof obs === 'string');
+  
+  return nameOk && typeOk && obsOk;
 }
 
 function isRelation(value: unknown): value is Relation {
@@ -71,12 +75,26 @@ function isRelation(value: unknown): value is Relation {
 
 export function validateCreateEntitiesRequest(args: unknown): CreateEntitiesRequest {
   if (!isRecord(args)) {
+    console.error("DEBUG: Invalid request format - not a record:", typeof args, args);
     throw new McpError(ErrorCode.InvalidParams, "Invalid request format");
   }
 
   const { entities } = args;
-  if (!Array.isArray(entities) || !entities.every(isEntity)) {
+  if (!Array.isArray(entities)) {
+    console.error("DEBUG: entities is not an array:", typeof entities, entities);
     throw new McpError(ErrorCode.InvalidParams, "Invalid entities array");
+  }
+  
+  for (let i = 0; i < entities.length; i++) {
+    const entity = entities[i];
+    if (!isEntity(entity)) {
+      console.error(`DEBUG: Entity ${i} failed validation:`, entity);
+      console.error(`DEBUG: Entity ${i} name type:`, typeof entity?.name);
+      console.error(`DEBUG: Entity ${i} entityType:`, entity?.entityType);  
+      console.error(`DEBUG: Entity ${i} entity_type:`, entity?.entity_type);
+      console.error(`DEBUG: Entity ${i} observations:`, entity?.observations);
+      throw new McpError(ErrorCode.InvalidParams, `Invalid entity at index ${i}`);
+    }
   }
 
   return { entities };
@@ -164,7 +182,7 @@ export function validateSearchSimilarRequest(args: unknown): SearchSimilarReques
     throw new McpError(ErrorCode.InvalidParams, "Invalid request format");
   }
 
-  const { query, entityTypes, limit } = args;
+  const { query, entityTypes, limit, searchMode } = args;
   if (typeof query !== 'string') {
     throw new McpError(ErrorCode.InvalidParams, "Missing or invalid query string");
   }
@@ -179,7 +197,14 @@ export function validateSearchSimilarRequest(args: unknown): SearchSimilarReques
     }
   }
 
-  return { query, entityTypes, limit };
+  const validSearchModes = ['semantic', 'keyword', 'hybrid'];
+  if (searchMode !== undefined) {
+    if (typeof searchMode !== 'string' || !validSearchModes.includes(searchMode)) {
+      throw new McpError(ErrorCode.InvalidParams, "searchMode must be one of: semantic, keyword, hybrid");
+    }
+  }
+
+  return { query, entityTypes, limit, searchMode: searchMode as 'semantic' | 'keyword' | 'hybrid' | undefined };
 }
 
 export function validateGetImplementationRequest(args: unknown): GetImplementationRequest {

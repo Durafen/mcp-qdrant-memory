@@ -8,6 +8,7 @@ import {
   QDRANT_API_KEY
 } from "../config.js";
 import { Entity, Relation, SmartGraph, ScrollOptions, KnowledgeGraph, SearchResult, SemanticMetadata } from "../types.js";
+import { BM25Service, HybridSearchFusion } from "../bm25/bm25Service.js";
 
 // Create custom Qdrant client that adds auth header
 class CustomQdrantClient extends QdrantClient {
@@ -84,6 +85,7 @@ export class QdrantPersistence {
   private openai: OpenAI;
   private initialized: boolean = false;
   private vectorSize: number = 1536; // Default to OpenAI, updated after initialization
+  private bm25Service: BM25Service;
 
   constructor() {
     if (!QDRANT_URL) {
@@ -102,6 +104,12 @@ export class QdrantPersistence {
 
     this.openai = new OpenAI({
       apiKey: OPENAI_API_KEY,
+    });
+
+    // Initialize BM25 service for keyword search
+    this.bm25Service = new BM25Service({
+      k1: 1.2,
+      b: 0.75,
     });
   }
 
@@ -158,7 +166,7 @@ export class QdrantPersistence {
             distance: "Cosine",
           },
         });
-        console.error(`Created new collection '${COLLECTION_NAME}' with ${defaultVectorSize}-dimensional vectors`);
+        // console.error(`Created new collection '${COLLECTION_NAME}' with ${defaultVectorSize}-dimensional vectors`);
         this.vectorSize = defaultVectorSize;
         return;
       }
@@ -167,22 +175,23 @@ export class QdrantPersistence {
       const collectionInfo = (await this.client.getCollection(
         COLLECTION_NAME
       )) as QdrantCollectionInfo;
-      const currentVectorSize = collectionInfo.config?.params?.vectors?.size;
+      
+      // Handle both old (vectors.size) and new (vectors.dense.size) collection formats
+      const vectorConfig = collectionInfo.config?.params?.vectors as any;
+      const currentVectorSize = vectorConfig?.size || vectorConfig?.dense?.size;
 
       if (!currentVectorSize) {
-        console.error(`Collection '${COLLECTION_NAME}' has no vector configuration, recreating...`);
-        const defaultVectorSize = this.getDefaultVectorSize();
-        await this.recreateCollection(defaultVectorSize);
+        // console.error(`Collection '${COLLECTION_NAME}' has no vector configuration - MCP server cannot create collections. Please index data first.`);
         return;
       }
 
-      console.error(`Using existing collection '${COLLECTION_NAME}' with ${currentVectorSize}-dimensional vectors`);
+      // console.error(`Using existing collection '${COLLECTION_NAME}' with ${currentVectorSize}-dimensional vectors`);
       
       // Update embedding model based on detected vector size
       this.updateEmbeddingModel(currentVectorSize);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown Qdrant error";
-      console.error("Failed to initialize collection:", message);
+      // console.error("Failed to initialize collection:", message);
       throw new Error(
         `Failed to initialize Qdrant collection. Please check server logs for details: ${message}`
       );
@@ -204,12 +213,12 @@ export class QdrantPersistence {
     
     // Update internal embedding model based on detected vector size
     if (vectorSize === 512) {
-      console.error("Detected Voyage embeddings (512-dim)");
+      // console.error("Detected Voyage embeddings (512-dim)");
       // Note: Would need to implement Voyage embedding generation
     } else if (vectorSize === 1536) {
-      console.error("Detected OpenAI embeddings (1536-dim)");
+      // console.error("Detected OpenAI embeddings (1536-dim)");
     } else {
-      console.error(`Unknown vector size: ${vectorSize}, using OpenAI embeddings`);
+      // console.error(`Unknown vector size: ${vectorSize}, using OpenAI embeddings`);
     }
   }
 
@@ -253,7 +262,7 @@ export class QdrantPersistence {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unknown OpenAI error";
-      console.error("OpenAI embedding error:", message);
+      // console.error("OpenAI embedding error:", message);
       throw new Error(`Failed to generate embeddings with OpenAI: ${message}`);
     }
   }
@@ -289,7 +298,7 @@ export class QdrantPersistence {
       return data.data[0].embedding;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown Voyage error";
-      console.error("Voyage embedding error:", message);
+      // console.error("Voyage embedding error:", message);
       throw new Error(`Failed to generate embeddings with Voyage: ${message}`);
     }
   }
@@ -302,41 +311,52 @@ export class QdrantPersistence {
   }
 
   async persistEntity(entity: Entity) {
-    await this.connect();
-    if (!COLLECTION_NAME) {
-      throw new Error("COLLECTION_NAME environment variable is required");
-    }
+    try {
+      await this.connect();
+      
+      if (!COLLECTION_NAME) {
+        throw new Error("COLLECTION_NAME environment variable is required");
+      }
 
-    const text = `${entity.name} (${
-      entity.entityType
-    }): ${(entity.observations || []).join(". ")}`;
-    const vector = await this.generateEmbedding(text);
-    
-    // Use consistent chunk ID format: {file_path}::{entity_name}::metadata
-    // For manual entities without file_path, use "manual" as file identifier
-    const idStr = `manual::${entity.name}::metadata`;
-    const id = await this.hashString(idStr);
+      const text = `${entity.name} (${
+        entity.entityType
+      }): ${(entity.observations || []).join(". ")}`;
+      
+      const vector = await this.generateEmbedding(text);
+      
+      // Use consistent chunk ID format: {file_path}::{entity_name}::metadata
+      // For manual entities without file_path, use "manual" as file identifier
+      const idStr = `manual::${entity.name}::metadata`;
+      const id = await this.hashString(idStr);
 
-    const payload = {
-      type: "chunk",
-      chunk_type: "metadata",
-      entity_name: entity.name,
-      entity_type: entity.entityType,
-      observations: entity.observations || [],  // Store as array for MCP compatibility
-      content: (entity.observations || []).join(". "),  // Keep joined text for embedding
-      file_path: undefined, // Could be extracted from observations if needed
-      created_at: new Date().toISOString()
-    };
-
-    await this.client.upsert(COLLECTION_NAME, {
-      points: [
-        {
-          id,
-          vector,
-          payload: payload as Record<string, unknown>,
+      const payload = {
+        type: "chunk",
+        chunk_type: "metadata",
+        entity_name: entity.name,
+        metadata: {
+          entity_type: entity.entityType,
+          observations: entity.observations || []
         },
-      ],
-    });
+        content: (entity.observations || []).join(". "),  // Keep joined text for embedding
+        file_path: undefined, // Could be extracted from observations if needed
+        created_at: new Date().toISOString()
+      };
+      
+      await this.client.upsert(COLLECTION_NAME, {
+        points: [
+          {
+            id,
+            vector: {
+              dense: vector
+            },
+            payload: payload as Record<string, unknown>,
+          },
+        ],
+      });
+    } catch (error) {
+      // console.error("Error persisting entity:", error);
+      throw error;
+    }
   }
 
   async persistRelation(relation: Relation) {
@@ -376,77 +396,163 @@ export class QdrantPersistence {
     });
   }
 
-  async searchSimilar(query: string, entityTypes?: string[], limit: number = 20) {
+  async searchSimilar(query: string, entityTypes?: string[], limit: number = 20, searchMode: 'semantic' | 'keyword' | 'hybrid' = 'semantic') {
     await this.connect();
     if (!COLLECTION_NAME) {
       throw new Error("COLLECTION_NAME environment variable is required");
     }
 
+    try {
+      switch (searchMode) {
+        case 'semantic':
+          return await this.performSemanticSearch(query, entityTypes, limit);
+        case 'keyword':
+          return await this.performKeywordSearch(query, entityTypes, limit);
+        case 'hybrid':
+          return await this.performHybridSearch(query, entityTypes, limit);
+        default:
+          throw new Error(`Unsupported search mode: ${searchMode}`);
+      }
+    } catch (error) {
+      // console.error(`Search error (${searchMode}):`, error);
+      return [];
+    }
+  }
+
+  private async performSemanticSearch(query: string, entityTypes?: string[], limit: number = 20): Promise<SearchResult[]> {
     const queryVector = await this.generateEmbedding(query);
 
     // Build filter based on entityTypes (supports both entity types and chunk types with OR logic)
-    let filter = undefined;
-    if (entityTypes && entityTypes.length > 0) {
-      // Separate entity types from chunk types
-      const knownChunkTypes = ["metadata", "implementation"];
-      const chunkTypes = entityTypes.filter(type => knownChunkTypes.includes(type));
-      const actualEntityTypes = entityTypes.filter(type => !knownChunkTypes.includes(type));
-      
-      const filterConditions = [];
-      
-      // Add entity_type filter if we have actual entity types
-      if (actualEntityTypes.length > 0) {
-        filterConditions.push({
-          should: [
-            {
-              key: "entity_type",
-              match: {
-                any: actualEntityTypes
-              }
-            },
-            {
-              key: "metadata.entity_type",
-              match: {
-                any: actualEntityTypes
-              }
-            }
-          ]
-        });
-      }
-      
-      // Add chunk_type filter if we have chunk types
-      if (chunkTypes.length > 0) {
-        filterConditions.push({
-          key: "chunk_type",
-          match: {
-            any: chunkTypes
-          }
-        });
-      }
-      
-      // Build final filter structure with OR logic
-      if (filterConditions.length > 0) {
-        if (filterConditions.length === 1) {
-          // Single filter condition - use must
-          filter = {
-            must: filterConditions
-          };
-        } else {
-          // Multiple filter conditions - use should for OR logic
-          filter = {
-            should: filterConditions
-          };
-        }
-      }
-    }
+    const filter = this.buildEntityTypeFilter(entityTypes);
 
-    const results = await this.client.search(COLLECTION_NAME, {
-      vector: queryVector,
+    const results = await this.client.search(COLLECTION_NAME!, {
+      vector: {
+        name: 'dense',
+        vector: queryVector
+      },
       limit,
       with_payload: true,
       filter
     });
 
+    return this.processSearchResults(results);
+  }
+
+  private async performKeywordSearch(query: string, entityTypes?: string[], limit: number = 20): Promise<SearchResult[]> {
+    await this.connect();
+    if (!COLLECTION_NAME) {
+      throw new Error("COLLECTION_NAME environment variable is required");
+    }
+
+    // Use BM25Service directly (same as hybrid search) - fixes hardcoded vocabulary issue
+    await this.initializeBM25Index();
+    const bm25Results = this.bm25Service.search(query, limit, entityTypes);
+    return bm25Results.map(result => BM25Service.convertToSearchResult(result, COLLECTION_NAME!));
+  }
+
+  private async performHybridSearch(query: string, entityTypes?: string[], limit: number = 20): Promise<SearchResult[]> {
+    // console.error(`[HYBRID DEBUG] Starting hybrid search for query: "${query}", limit: ${limit}, entityTypes: ${JSON.stringify(entityTypes)}`);
+    
+    // Get 20% more results from each search to improve fusion diversity
+    const expandedLimit = Math.ceil(limit * 1.2);
+    // console.error(`[HYBRID DEBUG] Using expanded limit: ${expandedLimit} (120% of ${limit}) for better fusion diversity`);
+    
+    // Perform both semantic and keyword searches in parallel with expanded limits
+    const [semanticResults, keywordResults] = await Promise.all([
+      this.performSemanticSearch(query, entityTypes, expandedLimit),
+      Promise.resolve(this.bm25Service.search(query, expandedLimit, entityTypes)),
+    ]);
+
+    // console.error(`[HYBRID DEBUG] Semantic results: ${semanticResults.length} items`);
+    semanticResults.slice(0, 3).forEach((result, idx) => {
+      // console.error(`[HYBRID DEBUG] Semantic #${idx + 1}: ${result.data.entity_name} (score: ${result.score}) - data.id: ${result.data.id || 'MISSING'}`);
+    });
+
+    // console.error(`[HYBRID DEBUG] Keyword results: ${keywordResults.length} items`);
+    keywordResults.slice(0, 3).forEach((result, idx) => {
+      // console.error(`[HYBRID DEBUG] Keyword #${idx + 1}: ${result.document.id} (score: ${result.score}) - data.id: ${result.document.data?.id || 'MISSING'}`);
+    });
+
+    // Fuse results using Reciprocal Rank Fusion algorithm
+    const hybridResults = HybridSearchFusion.fuseResults(
+      semanticResults,
+      keywordResults,
+      COLLECTION_NAME!,
+      0.7, // semantic weight
+      0.3, // keyword weight
+      60   // RRF constant
+    );
+
+    // console.error(`[HYBRID DEBUG] Fused results: ${hybridResults.length} items`);
+    hybridResults.slice(0, 5).forEach((result, idx) => {
+      // console.error(`[HYBRID DEBUG] Hybrid #${idx + 1}: ${result.data.entity_name} (score: ${result.score})`);
+    });
+
+    const finalResults = hybridResults.slice(0, limit);
+    // console.error(`[HYBRID DEBUG] Final results after limit: ${finalResults.length} items`);
+    
+    return finalResults;
+  }
+
+  private buildEntityTypeFilter(entityTypes?: string[]): any {
+    if (!entityTypes || entityTypes.length === 0) {
+      return undefined;
+    }
+
+    // Separate entity types from chunk types
+    const knownChunkTypes = ["metadata", "implementation"];
+    const chunkTypes = entityTypes.filter(type => knownChunkTypes.includes(type));
+    const actualEntityTypes = entityTypes.filter(type => !knownChunkTypes.includes(type));
+    
+    const filterConditions = [];
+    
+    // Add entity_type filter if we have actual entity types
+    if (actualEntityTypes.length > 0) {
+      filterConditions.push({
+        should: [
+          {
+            key: "entity_type",
+            match: {
+              any: actualEntityTypes
+            }
+          },
+          {
+            key: "metadata.entity_type",
+            match: {
+              any: actualEntityTypes
+            }
+          }
+        ]
+      });
+    }
+    
+    // Add chunk_type filter if we have chunk types
+    if (chunkTypes.length > 0) {
+      filterConditions.push({
+        key: "chunk_type",
+        match: {
+          any: chunkTypes
+        }
+      });
+    }
+    
+    // Build final filter structure with OR logic
+    if (filterConditions.length === 0) {
+      return undefined;
+    } else if (filterConditions.length === 1) {
+      // Single filter condition - use must
+      return {
+        must: filterConditions
+      };
+    } else {
+      // Multiple filter conditions - use should for OR logic
+      return {
+        should: filterConditions
+      };
+    }
+  }
+
+  private processSearchResults(results: any[]): SearchResult[] {
     const validResults: SearchResult[] = [];
 
     for (const result of results) {
@@ -480,6 +586,11 @@ export class QdrantPersistence {
           }
         }
           
+        // Debug payload metadata
+        if (payload.metadata?.content_bm25) {
+          console.error(`[🔍 PAYLOAD DEBUG] Entity: ${entityName}, payload.metadata has content_bm25: ${payload.metadata.content_bm25}`);
+        }
+        
         validResults.push({
           type: 'chunk',
           score: score,
@@ -496,6 +607,112 @@ export class QdrantPersistence {
     validResults.sort((a, b) => b.score - a.score);
 
     return validResults;
+  }
+
+  async initializeBM25Index(): Promise<void> {
+    // Always rebuild BM25 index to ensure entity names are included in content
+    const stats = this.bm25Service.getStats();
+    console.error(`🔥 FORCE REBUILDING BM25 INDEX - was ${stats.documentCount} docs`);
+    console.error(`[DEBUG] initializeBM25Index called from qdrant.ts line 572`);
+    this.bm25Service.clearDocuments();
+    
+    // Force clear any cached state
+    console.error(`🧹 BM25 cache cleared, rebuilding with entity names...`);
+
+    try {
+      await this.connect();
+      if (!COLLECTION_NAME) {
+        throw new Error("COLLECTION_NAME environment variable is required");
+      }
+
+      // Get all metadata chunks from Qdrant for BM25 indexing
+      const metadataChunks: any[] = [];
+      let offset: string | number | undefined = undefined;
+      const limit = 100;
+      let batchCount = 0;
+
+      console.error(`[DEBUG] Starting BM25 data collection loop with limit=${limit}`);
+
+      do {
+        batchCount++;
+        // console.error(`[DEBUG] BM25 Batch ${batchCount}: starting with offset=${offset}, collected=${metadataChunks.length} docs so far`);
+        
+        const scrollResult = await this.client.scroll(COLLECTION_NAME, {
+          limit,
+          offset,
+          with_payload: true,
+          with_vector: false,
+          filter: {
+            must: [
+              { key: "type", match: { value: "chunk" } },
+              { key: "chunk_type", match: { value: "metadata" } }
+            ]
+          }
+        });
+
+        // console.error(`[DEBUG] BM25 Batch ${batchCount}: scroll returned ${scrollResult.points.length} points, next_offset=${scrollResult.next_page_offset} (type: ${typeof scrollResult.next_page_offset})`);
+
+        for (const point of scrollResult.points) {
+          if (point.payload) {
+            metadataChunks.push(point.payload);
+          }
+        }
+
+        // console.error(`[DEBUG] BM25 Batch ${batchCount}: after processing, collected=${metadataChunks.length} total documents`);
+
+        offset = (typeof scrollResult.next_page_offset === 'string' || typeof scrollResult.next_page_offset === 'number' || typeof scrollResult.next_page_offset === 'bigint') 
+          ? scrollResult.next_page_offset 
+          : undefined;
+          
+        // console.error(`[DEBUG] BM25 Batch ${batchCount}: next offset=${offset}, will continue=${offset !== null && offset !== undefined && metadataChunks.length < 50000}`);
+        
+      } while (offset !== null && offset !== undefined && metadataChunks.length < 50000); // Safety limit to prevent infinite loops
+      
+      console.error(`[DEBUG] BM25 loop finished: ${batchCount} batches, ${metadataChunks.length} total documents collected`);
+
+      // Convert metadata chunks to BM25 documents with complete metadata  
+      const bm25Documents = metadataChunks.map((chunk: any) => {
+        const entityName = chunk.entity_name || chunk.id;
+        const finalContent = chunk.metadata?.content_bm25 || chunk.content || '';
+        
+        // Debug final content selection
+        console.error(`[🔍 FINAL CONTENT DEBUG] Entity: ${entityName}, has_content_bm25: ${!!chunk.metadata?.content_bm25}, finalContent: "${finalContent}"`);
+        
+        // Debug processing (using Python pre-formatted content)
+        if (entityName?.includes('CoreIndexer') || entityName === 'CoreIndexer') {
+          console.error('[🔍 BM25 CONTENT DEBUG] Processing chunk:', {
+            entity_name: entityName,
+            python_formatted_content: chunk.content?.substring(0, 150) + '...',
+            final_content: finalContent,
+            metadata_structure: {
+              has_metadata: !!chunk.metadata,
+              has_observations: !!chunk.metadata?.observations,
+              observations_count: chunk.metadata?.observations?.length || 0
+            }
+          });
+        }
+        
+        return {
+          id: chunk.entity_name || chunk.id,
+          content: finalContent,
+          entityType: chunk.metadata?.entity_type || chunk.entity_type || 'unknown',
+          observations: chunk.metadata?.observations || chunk.observations || [],
+          file_path: chunk.metadata?.file_path || chunk.file_path,
+          line_number: chunk.metadata?.line_number || chunk.line_number,
+          end_line_number: chunk.metadata?.end_line_number || chunk.end_line_number,
+          has_implementation: chunk.metadata?.has_implementation || chunk.has_implementation || false,
+          ...chunk, // Include all original chunk fields including content_hash, created_at
+        };
+      });
+
+      // Index documents in BM25 service
+      console.error(`[DEBUG] About to call bm25Service.updateDocuments with ${bm25Documents.length} documents from qdrant.ts initializeBM25Index`);
+      this.bm25Service.updateDocuments(bm25Documents);
+      
+      console.error(`BM25 index initialized with ${bm25Documents.length} metadata chunks`);
+    } catch (error) {
+      console.error('Failed to initialize BM25 index:', error);
+    }
   }
 
   async getImplementationChunks(
@@ -531,7 +748,10 @@ export class QdrantPersistence {
     try {
       // Search for implementation chunks for the specific entity
       const results = await this.client.search(COLLECTION_NAME!, {
-        vector: new Array(this.vectorSize).fill(0), // Dummy vector for filter-only search
+        vector: {
+          name: 'dense',
+          vector: new Array(this.vectorSize).fill(0) // Dummy vector for filter-only search
+        },
         limit: 50, // Optimized: Minimal scope maintained at 50 (no change needed)
         with_payload: true,
         filter: {
@@ -638,7 +858,10 @@ export class QdrantPersistence {
       
       // Also search for private helper functions (starting with _) in the same file
       const helperResults = await this.client.search(COLLECTION_NAME!, {
-        vector: new Array(this.vectorSize).fill(0),
+        vector: {
+          name: 'dense',
+          vector: new Array(this.vectorSize).fill(0)
+        },
         limit: limit || 12, // Optimized: Reduced from 25 to 12 to prevent token overflow
         with_payload: true,
         filter: {
@@ -694,7 +917,10 @@ export class QdrantPersistence {
     try {
       // Query for imported dependencies
       const dependencyResults = await this.client.search(COLLECTION_NAME!, {
-        vector: new Array(this.vectorSize).fill(0),
+        vector: {
+          name: 'dense',
+          vector: new Array(this.vectorSize).fill(0)
+        },
         limit: limit || 40,
         with_payload: true,
         filter: {
@@ -762,7 +988,10 @@ export class QdrantPersistence {
     try {
       // Quick existence check for implementation chunks
       const results = await this.client.search(COLLECTION_NAME!, {
-        vector: new Array(this.vectorSize).fill(0), // Dummy vector for filter-only search
+        vector: {
+          name: 'dense',
+          vector: new Array(this.vectorSize).fill(0) // Dummy vector for filter-only search
+        },
         limit: 1,
         with_payload: false,
         filter: {
@@ -825,26 +1054,26 @@ export class QdrantPersistence {
 
     const mode = options?.mode || 'smart';
     const entityTypeFilter = options?.entityTypes;
-    const limitPerType = options?.limit || 100;
+    const limitPerType = options?.limit || 10000; // Allow much higher default for BM25 corpus building
 
     // First, get raw data from Qdrant with limit enforcement and entityTypes filtering
     const rawData = await this._getRawData(limitPerType, entityTypeFilter);
 
-    console.log(`DEBUG DEEP: rawData.entities first 3:`, rawData.entities.slice(0, 3).map(e => ({ name: e.name, entityType: e.entityType })));
-    console.log(`DEBUG DEEP: rawData.relations first 3:`, rawData.relations.slice(0, 3).map(r => ({ from: r.from, to: r.to, relationType: r.relationType })));
+    console.error(`DEBUG DEEP: rawData.entities first 3:`, rawData.entities.slice(0, 3).map(e => ({ name: e.name, entityType: e.entityType })));
+    console.error(`DEBUG DEEP: rawData.relations first 3:`, rawData.relations.slice(0, 3).map(r => ({ from: r.from, to: r.to, relationType: r.relationType })));
 
     // Qdrant already filtered by entityTypes, no additional filtering needed
     let filteredEntities = rawData.entities;
     let filteredRelations = rawData.relations;
     
     // For entities mode with entityTypes filtering, filter relations to only show relevant ones
-    console.log(`DEBUG: mode="${mode}", entityTypeFilter=${JSON.stringify(entityTypeFilter)}, entities.length=${filteredEntities.length}, relations.length=${filteredRelations.length}`);
+    console.error(`DEBUG: mode="${mode}", entityTypeFilter=${JSON.stringify(entityTypeFilter)}, entities.length=${filteredEntities.length}, relations.length=${filteredRelations.length}`);
     
     if (entityTypeFilter && entityTypeFilter.length > 0) {
-      console.log(`DEBUG: Filtering relations for entityTypes filter (mode: ${mode})`);
-      console.log(`DEBUG: Relations before filtering:`, filteredRelations.length);
+      console.error(`DEBUG: Filtering relations for entityTypes filter (mode: ${mode})`);
+      console.error(`DEBUG: Relations before filtering:`, filteredRelations.length);
       filteredRelations = this.filterRelationsForEntities(filteredRelations, filteredEntities);
-      console.log(`DEBUG: Relations after filtering:`, filteredRelations.length);
+      console.error(`DEBUG: Relations after filtering:`, filteredRelations.length);
     }
 
     // Apply mode-specific filtering before returning
@@ -856,18 +1085,18 @@ export class QdrantPersistence {
           relationEntityNames.add(rel.from);
           relationEntityNames.add(rel.to);
         });
-        console.log(`DEBUG: relationships mode - searching for entities matching relation endpoints:`, Array.from(relationEntityNames).slice(0, 5));
+        console.error(`DEBUG: relationships mode - searching for entities matching relation endpoints:`, Array.from(relationEntityNames).slice(0, 5));
         
         // Search for entities whose names match the relation endpoints
         const matchedEntities = await this.fetchEntitiesByNames(Array.from(relationEntityNames), limitPerType);
-        console.log(`DEBUG: relationships mode - found ${matchedEntities.length} matching entities from ${relationEntityNames.size} relation endpoints`);
+        console.error(`DEBUG: relationships mode - found ${matchedEntities.length} matching entities from ${relationEntityNames.size} relation endpoints`);
         
         // Filter relations to only include those connecting the matched entities
         const matchedEntityNames = new Set(matchedEntities.map(e => e.name));
         const matchedRelations = filteredRelations.filter(rel => 
           matchedEntityNames.has(rel.from) && matchedEntityNames.has(rel.to)
         );
-        console.log(`DEBUG: relationships mode - filtered from ${filteredRelations.length} to ${matchedRelations.length} relations connecting matched entities`);
+        console.error(`DEBUG: relationships mode - filtered from ${filteredRelations.length} to ${matchedRelations.length} relations connecting matched entities`);
         
         return { entities: matchedEntities, relations: matchedRelations };
       
@@ -882,7 +1111,7 @@ export class QdrantPersistence {
 
   private async _getRawData(limit?: number, entityTypes?: string[]): Promise<{ entities: Entity[], relations: Relation[] }> {
     // Convert v2.4 chunks back to legacy format for read_graph compatibility
-    console.log(`DEBUG _getRawData: Starting with limit=${limit}, entityTypes=${JSON.stringify(entityTypes)}`);
+    console.error(`DEBUG _getRawData: Starting with limit=${limit}, entityTypes=${JSON.stringify(entityTypes)}`);
     const entities: Entity[] = [];
     const relations: Relation[] = [];
     const allEntities: Entity[] = []; // Track all entities for relation type filtering
@@ -915,7 +1144,7 @@ export class QdrantPersistence {
         const payload = point.payload as unknown as ChunkPayload;
 
         if (payload.type === "chunk") {
-          console.log('Processing chunk:', payload.chunk_type, payload.entity_name);
+          console.error('Processing chunk:', payload.chunk_type, payload.entity_name);
           if (payload.chunk_type === 'metadata') {
             // Only add entity if we haven't reached the limit AND passes entityTypes filter
             if (entityCount < maxEntities) {
@@ -956,7 +1185,7 @@ export class QdrantPersistence {
             const to = (payload as any).relation_target || (payload as any).to;
             const relationType = payload.relation_type || (payload as any).relationType;
             
-            console.log('Processing relation:', { from, to, relationType, payload });
+            console.error('Processing relation:', { from, to, relationType, payload });
             
             if (from && to && relationType) {
               relations.push({
@@ -964,9 +1193,9 @@ export class QdrantPersistence {
                 to: to,
                 relationType: relationType
               });
-              console.log('Added relation:', { from, to, relationType });
+              console.error('Added relation:', { from, to, relationType });
             } else {
-              console.log('Skipped relation - missing fields:', { from, to, relationType });
+              console.error('Skipped relation - missing fields:', { from, to, relationType });
             }
           }
         }
@@ -986,9 +1215,9 @@ export class QdrantPersistence {
     // Filter relations by entity types if specified
     const filteredRelations = this.filterRelationsByEntityTypes(relations, allEntities, entityTypes);
     
-    console.log(`DEBUG _getRawData: Returning ${entities.length} entities, ${filteredRelations.length} relations`);
-    console.log(`DEBUG _getRawData: Sample entities:`, entities.slice(0, 2).map(e => ({ name: e.name, entityType: e.entityType })));
-    console.log(`DEBUG _getRawData: Sample relations:`, filteredRelations.slice(0, 2).map(r => ({ from: r.from, to: r.to, relationType: r.relationType })));
+    console.error(`DEBUG _getRawData: Returning ${entities.length} entities, ${filteredRelations.length} relations`);
+    console.error(`DEBUG _getRawData: Sample entities:`, entities.slice(0, 2).map(e => ({ name: e.name, entityType: e.entityType })));
+    console.error(`DEBUG _getRawData: Sample relations:`, filteredRelations.slice(0, 2).map(r => ({ from: r.from, to: r.to, relationType: r.relationType })));
     
     return { entities, relations: filteredRelations };
   }
@@ -1226,7 +1455,10 @@ export class QdrantPersistence {
 
     // Step 1: Check if target entity exists
     const targetEntityResults = await this.client.search(COLLECTION_NAME, {
-      vector: new Array(this.vectorSize).fill(0), // Dummy vector for filter-only search
+      vector: {
+        name: 'dense',
+        vector: new Array(this.vectorSize).fill(0) // Dummy vector for filter-only search
+      },
       limit: 1,
       with_payload: true,
       filter: {
@@ -1325,7 +1557,10 @@ export class QdrantPersistence {
     
     // Build OR filter for all entity names
     const results = await this.client.search(COLLECTION_NAME!, {
-      vector: new Array(this.vectorSize).fill(0), // Dummy vector for filter-only search
+      vector: {
+        name: 'dense',
+        vector: new Array(this.vectorSize).fill(0) // Dummy vector for filter-only search
+      },
       limit: tokenAwareLimit, // Token-aware limit instead of hardcoded 1000
       with_payload: true,
       filter: {
@@ -1369,7 +1604,7 @@ export class QdrantPersistence {
     const entityTypeMap = new Map();
     allEntities.forEach(entity => entityTypeMap.set(entity.name, entity.entityType));
     
-    console.log(`[MCP DEBUG] Filtering ${relations.length} relations by entity types: ${actualEntityTypes.join(', ')}`);
+    // console.error(`[MCP DEBUG] Filtering ${relations.length} relations by entity types: ${actualEntityTypes.join(', ')}`);
     
     const filtered = relations.filter(relation => {
       const fromType = entityTypeMap.get(relation.from);
@@ -1377,15 +1612,15 @@ export class QdrantPersistence {
       return actualEntityTypes.includes(fromType) || actualEntityTypes.includes(toType);
     });
     
-    console.log(`[MCP DEBUG] Filtered to ${filtered.length} relations involving specified entity types`);
+    // console.error(`[MCP DEBUG] Filtered to ${filtered.length} relations involving specified entity types`);
     return filtered;
   }
 
   private filterRelationsForEntities(relations: Relation[], entities: Entity[]): Relation[] {
     // Create set of entity names for fast lookup
     const entityNames = new Set(entities.map(e => e.name));
-    console.log(`[MCP DEBUG] Filtering ${relations.length} relations for ${entities.length} entities`);
-    console.log(`[MCP DEBUG] Entity names:`, Array.from(entityNames).slice(0, 5));
+    // console.error(`[MCP DEBUG] Filtering ${relations.length} relations for ${entities.length} entities`);
+    // console.error(`[MCP DEBUG] Entity names:`, Array.from(entityNames).slice(0, 5));
     
     // Only include relations where from OR to entity is in our filtered set
     const filtered = relations.filter(relation => {
@@ -1393,7 +1628,7 @@ export class QdrantPersistence {
       return matches;
     });
     
-    console.log(`[MCP DEBUG] Filtered to ${filtered.length} relevant relations`);
+    // console.error(`[MCP DEBUG] Filtered to ${filtered.length} relevant relations`);
     return filtered;
   }
 
@@ -1454,6 +1689,65 @@ export class QdrantPersistence {
       }, {} as Record<string, number>);
 
     return { outgoing, incoming };
+  }
+
+  async getMetadataChunks(limit: number = 10000): Promise<any[]> {
+    await this.initialize();
+    if (!COLLECTION_NAME) {
+      throw new Error("COLLECTION_NAME environment variable is required");
+    }
+
+    const chunks: any[] = [];
+    let offset: string | number | undefined = undefined;
+    const batchSize = 100;
+    let collected = 0;
+    let batchCount = 0;
+
+    console.error(`[DEBUG] Starting getMetadataChunks with limit=${limit}`);
+
+    do {
+      batchCount++;
+      console.error(`[DEBUG] Batch ${batchCount}: offset=${offset}, collected=${collected}`);
+      
+      const scrollResult = await this.client.scroll(COLLECTION_NAME, {
+        limit: Math.min(batchSize, limit - collected),
+        offset,
+        with_payload: true,
+        with_vector: false,
+        filter: {
+          must: [
+            { key: 'chunk_type', match: { value: 'metadata' } }
+          ]
+        }
+      });
+
+      console.error(`[DEBUG] Batch ${batchCount}: got ${scrollResult.points.length} points, next_offset=${scrollResult.next_page_offset}`);
+      console.error(`[DEBUG] Batch ${batchCount}: next_offset type=${typeof scrollResult.next_page_offset}, value=${scrollResult.next_page_offset}`);
+
+      for (const point of scrollResult.points) {
+        if (point.payload && collected < limit) {
+          chunks.push(point.payload);
+          collected++;
+        }
+      }
+
+      // Handle all valid offset types (string, number, bigint)
+      offset = scrollResult.next_page_offset !== null && scrollResult.next_page_offset !== undefined 
+        ? scrollResult.next_page_offset as string | number
+        : undefined;
+        
+      console.error(`[DEBUG] Batch ${batchCount}: collected=${collected}, next_offset=${offset}`);
+      
+      // Safety check to prevent infinite loop
+      if (batchCount > 50) {
+        console.error(`[DEBUG] SAFETY BREAK: Stopping after 50 batches`);
+        break;
+      }
+    } while (offset !== null && offset !== undefined && collected < limit);
+
+    console.error(`BM25 index initialized with ${chunks.length} metadata chunks`);
+    console.error(`[DEBUG] Final stats: ${batchCount} batches, ${collected} collected, last_offset=${offset}`);
+    return chunks;
   }
 }
 // Test modification at Tue Jul 15 23:09:50 CEST 2025
