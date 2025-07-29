@@ -45,8 +45,34 @@ export class BM25Service {
    * Add documents to the BM25 index
    */
   addDocuments(documents: BM25Document[]): void {
+    console.error(`[BM25Service] Adding ${documents.length} documents to corpus`);
+    
     this.documents = [...this.documents, ...documents];
-    this.corpus = [...this.corpus, ...documents.map(doc => this.prepareText(doc.content))];
+    this.corpus = [...this.corpus, ...documents.map(doc => {
+      // Include entity name, content, type, and observations for comprehensive search
+      const searchableText = [
+        `${doc.id} ${doc.id}`,      // Boost entity name with 2x frequency
+        doc.content,                // Main content
+        doc.entityType,             // Entity type (class, function, etc.)
+        ...(doc.observations || []) // User annotations
+      ].filter(Boolean).join(' ');
+      
+      const processedText = this.prepareText(searchableText);
+      
+      // Debug log for CoreIndexer specifically
+      if (doc.id && doc.id.includes('CoreIndexer')) {
+        console.error(`[BM25Service] DEBUG CoreIndexer:`, {
+          id: doc.id,
+          entityType: doc.entityType,
+          searchableText: searchableText.substring(0, 200) + '...',
+          processedText: processedText.substring(0, 200) + '...'
+        });
+      }
+      
+      return processedText;
+    })];
+    
+    console.error(`[BM25Service] Total corpus size: ${this.corpus.length} documents`);
     this.isIndexed = false;
   }
 
@@ -83,12 +109,14 @@ export class BM25Service {
         return [];
       }
       
+      console.error(`[BM25Service] Searching for keywords: [${keywords.join(', ')}] in ${this.corpus.length} documents`);
+      
       // Perform BM25 search  
       const scores = (BM25 as any).default(this.corpus, keywords, {
         k1: this.config.k1!,
         b: this.config.b!,
       }) as number[];
-
+      
       // Create results with scores
       const results: BM25SearchResult[] = this.documents
         .map((doc, index) => ({
@@ -176,11 +204,33 @@ export class BM25Service {
       return '';
     }
 
-    return text
+    const tokens: string[] = [];
+    
+    // Original tokens (current behavior)
+    const originalTokens = text
       .toLowerCase()
-      .replace(/[^\w\s]/g, ' ') // Replace punctuation with spaces
-      .replace(/\s+/g, ' ')     // Normalize whitespace
-      .trim();
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(' ')
+      .filter(t => t.length > 0);
+    
+    tokens.push(...originalTokens);
+
+    // Add camelCase split tokens
+    const splitTokens = text
+      .replace(/([a-z])([A-Z])/g, '$1 $2')       // camelCase → camel Case
+      .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')  // XMLParser → XML Parser
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(' ')
+      .filter(t => t.length > 0);
+    
+    tokens.push(...splitTokens);
+
+    return [...new Set(tokens)].join(' ');
   }
 }
 

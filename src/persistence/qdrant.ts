@@ -428,13 +428,14 @@ export class QdrantPersistence {
   }
 
   private async performKeywordSearch(query: string, entityTypes?: string[], limit: number = 20): Promise<SearchResult[]> {
-    // Initialize BM25 index with current documents if needed
-    await this.initializeBM25Index();
+    await this.connect();
+    if (!COLLECTION_NAME) {
+      throw new Error("COLLECTION_NAME environment variable is required");
+    }
 
-    // Perform BM25 keyword search
+    // Use BM25Service directly (same as hybrid search) - fixes hardcoded vocabulary issue
+    await this.initializeBM25Index();
     const bm25Results = this.bm25Service.search(query, limit, entityTypes);
-    
-    // Convert BM25 results to SearchResult format
     return bm25Results.map(result => BM25Service.convertToSearchResult(result, COLLECTION_NAME!));
   }
 
@@ -572,6 +573,7 @@ export class QdrantPersistence {
     // Always rebuild BM25 index to ensure entity names are included in content
     const stats = this.bm25Service.getStats();
     console.error(`🔥 FORCE REBUILDING BM25 INDEX - was ${stats.documentCount} docs`);
+    console.error(`[DEBUG] initializeBM25Index called from qdrant.ts line 572`);
     this.bm25Service.clearDocuments();
     
     // Force clear any cached state
@@ -627,6 +629,7 @@ export class QdrantPersistence {
       }));
 
       // Index documents in BM25 service
+      console.error(`[DEBUG] About to call bm25Service.updateDocuments with ${bm25Documents.length} documents from qdrant.ts initializeBM25Index`);
       this.bm25Service.updateDocuments(bm25Documents);
       
       console.error(`BM25 index initialized with ${bm25Documents.length} metadata chunks`);
@@ -974,7 +977,7 @@ export class QdrantPersistence {
 
     const mode = options?.mode || 'smart';
     const entityTypeFilter = options?.entityTypes;
-    const limitPerType = options?.limit || 100;
+    const limitPerType = options?.limit || 10000; // Allow much higher default for BM25 corpus building
 
     // First, get raw data from Qdrant with limit enforcement and entityTypes filtering
     const rawData = await this._getRawData(limitPerType, entityTypeFilter);
@@ -1621,8 +1624,14 @@ export class QdrantPersistence {
     let offset: string | number | undefined = undefined;
     const batchSize = 100;
     let collected = 0;
+    let batchCount = 0;
+
+    console.error(`[DEBUG] Starting getMetadataChunks with limit=${limit}`);
 
     do {
+      batchCount++;
+      console.error(`[DEBUG] Batch ${batchCount}: offset=${offset}, collected=${collected}`);
+      
       const scrollResult = await this.client.scroll(COLLECTION_NAME, {
         limit: Math.min(batchSize, limit - collected),
         offset,
@@ -1635,6 +1644,9 @@ export class QdrantPersistence {
         }
       });
 
+      console.error(`[DEBUG] Batch ${batchCount}: got ${scrollResult.points.length} points, next_offset=${scrollResult.next_page_offset}`);
+      console.error(`[DEBUG] Batch ${batchCount}: next_offset type=${typeof scrollResult.next_page_offset}, value=${scrollResult.next_page_offset}`);
+
       for (const point of scrollResult.points) {
         if (point.payload && collected < limit) {
           chunks.push(point.payload);
@@ -1642,12 +1654,22 @@ export class QdrantPersistence {
         }
       }
 
-      offset = (typeof scrollResult.next_page_offset === 'string' || typeof scrollResult.next_page_offset === 'number') 
-        ? scrollResult.next_page_offset 
+      // Handle all valid offset types (string, number, bigint)
+      offset = scrollResult.next_page_offset !== null && scrollResult.next_page_offset !== undefined 
+        ? scrollResult.next_page_offset as string | number
         : undefined;
+        
+      console.error(`[DEBUG] Batch ${batchCount}: collected=${collected}, next_offset=${offset}`);
+      
+      // Safety check to prevent infinite loop
+      if (batchCount > 50) {
+        console.error(`[DEBUG] SAFETY BREAK: Stopping after 50 batches`);
+        break;
+      }
     } while (offset !== null && offset !== undefined && collected < limit);
 
     console.error(`BM25 index initialized with ${chunks.length} metadata chunks`);
+    console.error(`[DEBUG] Final stats: ${batchCount} batches, ${collected} collected, last_offset=${offset}`);
     return chunks;
   }
 }

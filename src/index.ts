@@ -58,8 +58,10 @@ class KnowledgeGraphManager {
 
   private async initializeBM25Index(): Promise<void> {
     try {
+      console.error(`[DEBUG] initializeBM25Index called from index.ts line 59`);
       // Get metadata chunks directly from Qdrant for BM25 indexing
       const metadataChunks = await this.qdrant.getMetadataChunks(10000);
+      console.error(`[DEBUG] getMetadataChunks returned ${metadataChunks.length} chunks from index.ts`);
       
       // Convert chunks to BM25 documents
       const bm25Documents = metadataChunks.map((chunk: any) => ({
@@ -70,6 +72,7 @@ class KnowledgeGraphManager {
       }));
 
       // Index documents in BM25 service
+      console.error(`[DEBUG] About to call bm25Service.updateDocuments with ${bm25Documents.length} documents from index.ts initializeBM25Index`);
       this.bm25Service.updateDocuments(bm25Documents);
       
       console.error(`BM25 index initialized with ${bm25Documents.length} documents`);
