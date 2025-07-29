@@ -177,6 +177,7 @@ export class BM25Service {
       type: 'chunk',
       score: bm25Result.score,
       data: {
+        id: doc.id,
         entity_name: doc.id,
         chunk_type: 'metadata',
         content: doc.content,

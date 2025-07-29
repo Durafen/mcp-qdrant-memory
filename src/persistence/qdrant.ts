@@ -440,11 +440,23 @@ export class QdrantPersistence {
   }
 
   private async performHybridSearch(query: string, entityTypes?: string[], limit: number = 20): Promise<SearchResult[]> {
+    console.error(`[HYBRID DEBUG] Starting hybrid search for query: "${query}", limit: ${limit}, entityTypes: ${JSON.stringify(entityTypes)}`);
+    
     // Perform both semantic and keyword searches in parallel
     const [semanticResults, keywordResults] = await Promise.all([
       this.performSemanticSearch(query, entityTypes, limit),
       Promise.resolve(this.bm25Service.search(query, limit, entityTypes)),
     ]);
+
+    console.error(`[HYBRID DEBUG] Semantic results: ${semanticResults.length} items`);
+    semanticResults.slice(0, 3).forEach((result, idx) => {
+      console.error(`[HYBRID DEBUG] Semantic #${idx + 1}: ${result.data.entity_name} (score: ${result.score}) - data.id: ${result.data.id || 'MISSING'}`);
+    });
+
+    console.error(`[HYBRID DEBUG] Keyword results: ${keywordResults.length} items`);
+    keywordResults.slice(0, 3).forEach((result, idx) => {
+      console.error(`[HYBRID DEBUG] Keyword #${idx + 1}: ${result.document.id} (score: ${result.score}) - data.id: ${result.document.data?.id || 'MISSING'}`);
+    });
 
     // Fuse results using Reciprocal Rank Fusion algorithm
     const hybridResults = HybridSearchFusion.fuseResults(
@@ -456,7 +468,15 @@ export class QdrantPersistence {
       60   // RRF constant
     );
 
-    return hybridResults.slice(0, limit);
+    console.error(`[HYBRID DEBUG] Fused results: ${hybridResults.length} items`);
+    hybridResults.slice(0, 5).forEach((result, idx) => {
+      console.error(`[HYBRID DEBUG] Hybrid #${idx + 1}: ${result.data.entity_name} (score: ${result.score})`);
+    });
+
+    const finalResults = hybridResults.slice(0, limit);
+    console.error(`[HYBRID DEBUG] Final results after limit: ${finalResults.length} items`);
+    
+    return finalResults;
   }
 
   private buildEntityTypeFilter(entityTypes?: string[]): any {
@@ -631,17 +651,38 @@ export class QdrantPersistence {
       console.error(`[DEBUG] BM25 loop finished: ${batchCount} batches, ${metadataChunks.length} total documents collected`);
 
       // Convert metadata chunks to BM25 documents with complete metadata
-      const bm25Documents = metadataChunks.map((chunk: any) => ({
-        id: chunk.entity_name || chunk.id,
-        content: `${chunk.entity_name || chunk.id} ${chunk.content || ''}`.trim(),
-        entityType: chunk.metadata?.entity_type || chunk.entity_type || 'unknown',
-        observations: chunk.metadata?.observations || chunk.observations || [],
-        file_path: chunk.metadata?.file_path || chunk.file_path,
-        line_number: chunk.metadata?.line_number || chunk.line_number,
-        end_line_number: chunk.metadata?.end_line_number || chunk.end_line_number,
-        has_implementation: chunk.metadata?.has_implementation || chunk.has_implementation || false,
-        ...chunk, // Include all original chunk fields including content_hash, created_at
-      }));
+      const bm25Documents = metadataChunks.map((chunk: any) => {
+        const firstObs = chunk.metadata?.observations?.[0];
+        const cleanedObs = firstObs?.replace(/^[^:]+:\s*/, '');
+        const finalContent = `${chunk.entity_name || chunk.id} ${cleanedObs || chunk.content || ''}`.trim();
+        
+        // Debug CoreIndexer chunks
+        if (chunk.entity_name === 'CoreIndexer') {
+          console.error('[DEBUG] CoreIndexer BM25 content processing:', {
+            entity_name: chunk.entity_name,
+            has_metadata: !!chunk.metadata,
+            has_observations: !!chunk.metadata?.observations,
+            observations_length: chunk.metadata?.observations?.length || 0,
+            first_observation: firstObs,
+            cleaned_observation: cleanedObs,
+            fallback_content: chunk.content,
+            final_content: finalContent,
+            content_source: cleanedObs ? 'cleaned_observation' : 'fallback_content'
+          });
+        }
+        
+        return {
+          id: chunk.entity_name || chunk.id,
+          content: finalContent,
+          entityType: chunk.metadata?.entity_type || chunk.entity_type || 'unknown',
+          observations: chunk.metadata?.observations || chunk.observations || [],
+          file_path: chunk.metadata?.file_path || chunk.file_path,
+          line_number: chunk.metadata?.line_number || chunk.line_number,
+          end_line_number: chunk.metadata?.end_line_number || chunk.end_line_number,
+          has_implementation: chunk.metadata?.has_implementation || chunk.has_implementation || false,
+          ...chunk, // Include all original chunk fields including content_hash, created_at
+        };
+      });
 
       // Index documents in BM25 service
       console.error(`[DEBUG] About to call bm25Service.updateDocuments with ${bm25Documents.length} documents from qdrant.ts initializeBM25Index`);
