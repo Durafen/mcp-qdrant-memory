@@ -86,6 +86,8 @@ export class QdrantPersistence {
   private initialized: boolean = false;
   private vectorSize: number = 1536; // Default to OpenAI, updated after initialization
   private bm25Service: BM25Service;
+  private bm25Initialized: boolean = false;
+  private bm25InitializationPromise: Promise<void> | null = null;
 
   constructor() {
     if (!QDRANT_URL) {
@@ -444,7 +446,7 @@ export class QdrantPersistence {
       throw new Error("COLLECTION_NAME environment variable is required");
     }
 
-    // Use BM25Service directly (same as hybrid search) - fixes hardcoded vocabulary issue
+    // Ensure BM25 is initialized before processing search
     await this.initializeBM25Index();
     const bm25Results = this.bm25Service.search(query, limit, entityTypes);
     return bm25Results.map(result => BM25Service.convertToSearchResult(result, COLLECTION_NAME!));
@@ -456,6 +458,9 @@ export class QdrantPersistence {
     // Get 20% more results from each search to improve fusion diversity
     const expandedLimit = Math.ceil(limit * 1.2);
     // console.error(`[HYBRID DEBUG] Using expanded limit: ${expandedLimit} (120% of ${limit}) for better fusion diversity`);
+    
+    // Ensure BM25 is initialized before performing any search
+    await this.initializeBM25Index();
     
     // Perform both semantic and keyword searches in parallel with expanded limits
     const [semanticResults, keywordResults] = await Promise.all([
@@ -610,6 +615,24 @@ export class QdrantPersistence {
   }
 
   async initializeBM25Index(): Promise<void> {
+    // If already initialized, return immediately
+    if (this.bm25Initialized) {
+      return;
+    }
+
+    // If initialization is already in progress, wait for it
+    if (this.bm25InitializationPromise) {
+      return this.bm25InitializationPromise;
+    }
+
+    // Start initialization
+    this.bm25InitializationPromise = this.doInitializeBM25Index();
+    await this.bm25InitializationPromise;
+    this.bm25Initialized = true;
+    this.bm25InitializationPromise = null;
+  }
+
+  private async doInitializeBM25Index(): Promise<void> {
     // Always rebuild BM25 index to ensure entity names are included in content
     const stats = this.bm25Service.getStats();
     console.error(`🔥 FORCE REBUILDING BM25 INDEX - was ${stats.documentCount} docs`);

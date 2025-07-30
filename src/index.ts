@@ -203,6 +203,7 @@ class MemoryServer {
     );
 
     this.graphManager = new KnowledgeGraphManager();
+    // Initialization happens in run() method before server connects
     this.setupToolHandlers();
   }
 
